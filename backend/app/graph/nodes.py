@@ -16,8 +16,16 @@ from app.core.errors import InvalidInputError, PayloadTooLargeError
 from app.core.ids import utc_now
 from app.graph.state import InvestigationState, ProcessingStep
 from app.graph.validation import validate_report
-from app.logengine.models import Runtime, Severity
-from app.logengine.pipeline import analyze
+from app.logengine.models import DeterministicSummary, Runtime, Severity
+from app.logengine.pipeline import (
+    ParsedStage,
+    build_redactor,
+    redact_events,
+    stage_evidence,
+    stage_group,
+    stage_parse,
+    stage_rank,
+)
 from app.models.base import (
     BaseChatModel,
     ChatMessage,
@@ -116,13 +124,21 @@ def validate_input(state: InvestigationState) -> dict[str, Any]:
 
 
 def parse_logs(state: InvestigationState) -> dict[str, Any]:
-    """Detect the format, parse, and normalize+group+rank deterministically."""
+    """Detect the format, parse, and redact sensitive values."""
     started = _started(state)
     settings = state["settings"]
     raw = state.get("raw_input") or ""
 
     requested = Runtime(state.get("requested_runtime") or "auto")
-    result = analyze(text=raw, settings=settings, runtime=requested)
+    parsed = stage_parse(text=raw, runtime=requested)
+    events, redaction_count = redact_events(parsed.events, build_redactor(settings))
+
+    warnings = list(parsed.warnings)
+    if redaction_count:
+        warnings.append(
+            f"Redacted {redaction_count} potentially sensitive value(s) before analysis. "
+            "Pattern-based redaction is best-effort and cannot detect every secret."
+        )
 
     return {
         "processing_steps": _record(
@@ -130,23 +146,78 @@ def parse_logs(state: InvestigationState) -> dict[str, Any]:
             "parse_logs",
             "completed",
             started,
-            f"Parsed {result.summary.total_events} events "
-            f"({result.summary.detected_runtime.value} format)",
+            f"Parsed {len(events)} events ({parsed.detected_runtime.value} format); "
+            f"redacted {redaction_count} value(s)",
         ),
-        "summary": result.summary,
-        "events": result.events,
-        "groups": result.groups,
-        "evidence": result.evidence,
-        "warnings": result.warnings,
+        "events": events,
+        "warnings": warnings,
+        "parsed_stage": parsed,
+    }
+
+
+def normalize_and_group(state: InvestigationState) -> dict[str, Any]:
+    """Normalize variable values so recurring errors group together."""
+    started = _started(state)
+    events = stage_group(state.get("events") or [])
+    return {
+        "processing_steps": _record(
+            state,
+            "normalize_and_group",
+            "completed",
+            started,
+            f"Normalized {len(events)} event(s)",
+        ),
+        "events": events,
+    }
+
+
+def rank_errors(state: InvestigationState) -> dict[str, Any]:
+    """Assign deterministic severity and rank the groups."""
+    started = _started(state)
+    groups = stage_rank(state.get("events") or [])
+    events = state.get("events") or []
+
+    error_count = sum(
+        1 for g in groups if g.severity in {Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM}
+    )
+    warning_count = sum(1 for g in groups if g.severity is Severity.LOW)
+
+    parsed: ParsedStage | None = state.get("parsed_stage")
+    summary = DeterministicSummary(
+        total_lines=parsed.total_lines if parsed else 0,
+        total_events=len(events),
+        error_group_count=error_count,
+        warning_group_count=warning_count,
+        runtime=Runtime(state.get("requested_runtime") or "auto"),
+        detected_runtime=parsed.detected_runtime if parsed else Runtime.GENERIC,
+    )
+
+    return {
+        "processing_steps": _record(
+            state,
+            "rank_errors",
+            "completed",
+            started,
+            f"Ranked {len(groups)} group(s): {error_count} error, {warning_count} warning",
+        ),
+        "groups": groups,
+        "summary": summary,
     }
 
 
 def select_evidence(state: InvestigationState) -> dict[str, Any]:
-    """Record the evidence actually selected for the model."""
+    """Select a bounded, redacted evidence set for the model (SPEC §7.8)."""
     started = _started(state)
-    evidence = state.get("evidence")
-    if evidence is None:  # pragma: no cover - parse_logs always sets it
-        return {}
+    evidence = stage_evidence(
+        events=state.get("events") or [],
+        groups=state.get("groups") or [],
+        redactor=build_redactor(state["settings"]),
+        settings=state["settings"],
+    )
+
+    warnings = list(state.get("warnings") or [])
+    if evidence.truncated and evidence.note:
+        warnings.append(evidence.note)
 
     note = "truncated" if evidence.truncated else "complete"
     return {
@@ -156,7 +227,9 @@ def select_evidence(state: InvestigationState) -> dict[str, Any]:
             "completed",
             started,
             f"Selected {len(evidence.items)} evidence items ({evidence.total_chars} chars, {note})",
-        )
+        ),
+        "evidence": evidence,
+        "warnings": warnings,
     }
 
 
@@ -306,6 +379,22 @@ def validate_findings(state: InvestigationState) -> dict[str, Any]:
 
     decoded = state.get("decoded_report")
     decode_error = state.get("decode_error")
+
+    # The model may never have been reached at all (unavailable, timed out, or
+    # there was nothing to investigate). That is a skip, not a decode failure.
+    if state.get("model_response") is None:
+        reason = state.get("ai_skipped_reason") or "No model output was produced."
+        return {
+            "processing_steps": _record(
+                state,
+                "validate_findings",
+                "skipped",
+                started,
+                f"No model output to validate: {reason}",
+            ),
+            "validation_errors": [],
+            "findings": [],
+        }
 
     if decoded is None:
         return {

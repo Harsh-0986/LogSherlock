@@ -58,8 +58,8 @@ def build_graph(model: BaseChatModel):
 
     graph.add_node("validate_input", nodes.validate_input)
     graph.add_node("parse_logs", nodes.parse_logs)
-    graph.add_node("normalize_and_group", nodes.parse_logs)
-    graph.add_node("rank_errors", nodes.parse_logs)
+    graph.add_node("normalize_and_group", nodes.normalize_and_group)
+    graph.add_node("rank_errors", nodes.rank_errors)
     graph.add_node("select_evidence", nodes.select_evidence)
     graph.add_node("investigate_with_model", _investigate)
     graph.add_node("validate_findings", nodes.validate_findings)

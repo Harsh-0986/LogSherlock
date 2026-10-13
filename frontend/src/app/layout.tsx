@@ -1,21 +1,27 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
+import { Nav } from "@/components/Nav";
 import "./globals.css";
 
-const inter = Inter({
+const plexSans = IBM_Plex_Sans({
   subsets: ["latin"],
-  variable: "--font-sans",
+  weight: ["400", "500", "600"],
+  variable: "--font-plex-sans",
   display: "swap",
 });
 
-const mono = JetBrains_Mono({
+const plexMono = IBM_Plex_Mono({
   subsets: ["latin"],
-  variable: "--font-mono",
+  weight: ["400", "500"],
+  variable: "--font-plex-mono",
   display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "LogSherlock — evidence-backed AI log investigation",
+  title: {
+    default: "LogSherlock",
+    template: "%s · LogSherlock",
+  },
   description:
     "Turn raw application logs into an actionable debugging report, backed by evidence and powered by open-weight AI.",
 };
@@ -24,9 +30,10 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${mono.variable}`}>
-      <body className="min-h-screen bg-neutral-950 text-neutral-100 antialiased">
-        {children}
+    <html lang="en" className={`${plexSans.variable} ${plexMono.variable}`}>
+      <body className="min-h-screen bg-base font-sans text-ink antialiased">
+        <Nav />
+        <main>{children}</main>
       </body>
     </html>
   );

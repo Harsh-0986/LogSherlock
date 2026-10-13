@@ -38,17 +38,10 @@ export type InvestigationStatus =
   | "partial"
   | "failed";
 
-/** SPEC §8.4 — one observable graph-node transition. */
-export interface ProcessingStep {
-  id?: string;
-  step: string;
-  status: "running" | "completed" | "failed" | "skipped";
-  started_at: string;
-  completed_at?: string | null;
-  summary?: string | null;
-}
+/** SPEC §10.5. Re-exported from the shared report types so there is one source. */
+export type { ProcessingStep } from "./types";
+import type { ProcessingStep } from "./types";
 
-/** SPEC §10.5 */
 export interface InvestigationStatusResponse {
   id: string;
   status: InvestigationStatus;
@@ -97,7 +90,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
       headers: {
         Accept: "application/json",
-        ...(init?.body ? { "Content-Type": "application/json" } : {}),
+        // FormData must keep the browser's own multipart Content-Type.
+        ...(init?.body && !(init.body instanceof FormData)
+          ? { "Content-Type": "application/json" }
+          : {}),
         ...init?.headers,
       },
     });
@@ -135,6 +131,23 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  uploadInvestigation: (
+    file: File,
+    options: { runtime?: string; context?: string | null } = {},
+  ) => {
+    // FormData sets its own Content-Type with the multipart boundary; the
+    // shared `request` helper must not overwrite it.
+    const form = new FormData();
+    form.append("file", file);
+    form.append("runtime", options.runtime ?? "auto");
+    if (options.context) form.append("context", options.context);
+
+    return request<StartInvestigationResponse>("/api/v1/investigations/upload", {
+      method: "POST",
+      body: form,
+    });
+  },
 
   investigationStatus: (id: string) =>
     request<InvestigationStatusResponse>(`/api/v1/investigations/${id}/status`),

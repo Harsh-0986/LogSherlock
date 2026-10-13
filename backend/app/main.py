@@ -12,6 +12,8 @@ from starlette.middleware.cors import CORSMiddleware
 from app.api.errors import register_exception_handlers
 from app.api.router import api_router
 from app.config import get_settings
+from app.jobs.manager import JobManager
+from app.store.factory import build_store
 
 
 def _configure_logging(level: str) -> None:
@@ -27,14 +29,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup/shutdown hooks."""
     settings = get_settings()
     _configure_logging(settings.log_level)
-    logging.getLogger("logsherlock").info(
-        "Starting %s (env=%s, provider=%s)",
+
+    store = build_store(settings)
+    app.state.store = store
+    app.state.job_manager = JobManager(store=store, settings=settings)
+
+    logger = logging.getLogger("logsherlock")
+    logger.info(
+        "Starting %s (env=%s, provider=%s, store=%s)",
         settings.app_name,
         settings.app_env,
         settings.model_provider,
+        type(store).__name__,
     )
-    yield
-    logging.getLogger("logsherlock").info("Shutting down %s", settings.app_name)
+    try:
+        yield
+    finally:
+        await app.state.job_manager.shutdown()
+        store.close()
+        logger.info("Shutting down %s", settings.app_name)
 
 
 def create_app() -> FastAPI:

@@ -4,6 +4,10 @@ parse -> redact -> normalize -> group -> rank -> select evidence.
 
 None of this touches the model. Phase 2 acceptance is that a sample file yields
 correct, repeatable error groups with no model connection at all.
+
+The work is exposed both as a single ``analyze()`` convenience call and as
+individual stages, so the LangGraph nodes can each perform only their own step
+rather than re-running the whole pipeline three times.
 """
 
 from __future__ import annotations
@@ -43,7 +47,7 @@ class DeterministicResult:
         return [
             g
             for g in self.groups
-            if g.severity in {Severity.HIGH, Severity.CRITICAL, Severity.MEDIUM}
+            if g.severity in {Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM}
         ]
 
     @property
@@ -52,20 +56,38 @@ class DeterministicResult:
         return [g for g in self.groups if g.severity is Severity.LOW]
 
 
-def analyze(
-    *,
-    text: str,
-    settings: Settings,
-    runtime: Runtime = Runtime.AUTO,
-) -> DeterministicResult:
-    """Run the full deterministic analysis over ``text``.
+@dataclass(slots=True)
+class ParsedStage:
+    """Output of the parse stage."""
+
+    events: list[LogEvent]
+    detected_runtime: Runtime
+    requested_runtime: Runtime
+    total_lines: int
+    warnings: list[str] = field(default_factory=list)
+
+
+def build_redactor(settings: Settings) -> Redactor:
+    """Return the configured redactor."""
+    return Redactor(
+        enabled=settings.redaction_enabled,
+        redact_ip_addresses=settings.redact_ip_addresses,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stage 1: parse (+ redact)
+# ---------------------------------------------------------------------------
+
+
+def stage_parse(*, text: str, runtime: Runtime = Runtime.AUTO) -> ParsedStage:
+    """Detect the format, parse, and redact sensitive values.
 
     Never raises for content problems: unparsable input degrades to the generic
-    parser and the limitation is recorded in ``warnings`` (SPEC §8.5).
+    parser and the limitation is recorded in ``warnings`` (SPEC §7.3, §8.5).
     """
     warnings: list[str] = []
 
-    # --- 1. Detect / choose format -------------------------------------
     # Only AUTO triggers detection. An explicitly requested runtime — including
     # GENERIC — is honoured as-is, so a caller can force the generic parser.
     detected = detect_runtime(text) if runtime is Runtime.AUTO else runtime
@@ -76,11 +98,8 @@ def analyze(
             "Fields such as exception type and service may be missing."
         )
 
-    parser = get_parser(detected)
-
-    # --- 2. Parse -------------------------------------------------------
     try:
-        events = parser.parse(text)
+        events = get_parser(detected).parse(text)
     except Exception as exc:
         warnings.append(
             f"Parser {detected.value} failed ({type(exc).__name__}); used generic parser."
@@ -91,18 +110,28 @@ def analyze(
     for event in events:
         warnings.extend(f"Line {event.line_number}: {w}" for w in event.warnings)
 
-    # --- 3. Redact in place on the event copy --------------------------
-    redactor = Redactor(
-        enabled=settings.redaction_enabled,
-        redact_ip_addresses=settings.redact_ip_addresses,
+    return ParsedStage(
+        events=events,
+        detected_runtime=detected,
+        requested_runtime=runtime,
+        total_lines=len(text.splitlines()),
+        warnings=warnings,
     )
-    redaction_count = 0
-    redacted_events: list[LogEvent] = []
+
+
+def redact_events(
+    events: list[LogEvent],
+    redactor: Redactor,
+) -> tuple[list[LogEvent], int]:
+    """Redact every event, returning new events and the replacement count."""
+    total = 0
+    out: list[LogEvent] = []
+
     for event in events:
         redacted_raw = redactor.redact(event.raw_text)
         if redacted_raw.changed:
-            redaction_count += redacted_raw.total_redactions
-        redacted_events.append(
+            total += redacted_raw.total_redactions
+        out.append(
             event.model_copy(
                 update={
                     "redacted_text": redacted_raw.text,
@@ -110,49 +139,101 @@ def analyze(
                 }
             )
         )
-    events = redacted_events
 
+    return out, total
+
+
+# ---------------------------------------------------------------------------
+# Stage 2+3: normalize, group, rank
+# ---------------------------------------------------------------------------
+
+
+def stage_group(events: list[LogEvent]) -> list[LogEvent]:
+    """Attach normalized messages to events (SPEC §7.5)."""
+    return apply_normalized_messages(events)
+
+
+def stage_rank(events: list[LogEvent]) -> list[ErrorGroup]:
+    """Group events and rank the resulting groups by severity (SPEC §7.6, §7.7)."""
+    return rank_groups(group_events(events))
+
+
+# ---------------------------------------------------------------------------
+# Convenience: the whole deterministic pipeline
+# ---------------------------------------------------------------------------
+
+
+def analyze(
+    *,
+    text: str,
+    settings: Settings,
+    runtime: Runtime = Runtime.AUTO,
+) -> DeterministicResult:
+    """Run every deterministic stage over ``text`` in order."""
+    warnings: list[str] = []
+    redactor = build_redactor(settings)
+
+    parsed = stage_parse(text=text, runtime=runtime)
+    warnings.extend(parsed.warnings)
+
+    events, redaction_count = redact_events(parsed.events, redactor)
     if redaction_count:
         warnings.append(
             f"Redacted {redaction_count} potentially sensitive value(s) before analysis. "
             "Pattern-based redaction is best-effort and cannot detect every secret."
         )
 
-    # --- 4. Normalize + group -----------------------------------------
-    events = apply_normalized_messages(events)
-    groups = rank_groups(group_events(events))
+    events = stage_group(events)
+    groups = stage_rank(events)
 
-    # --- 5. Evidence ----------------------------------------------------
-    evidence = select_evidence(
+    evidence = stage_evidence(events=events, groups=groups, redactor=redactor, settings=settings)
+    if evidence.truncated and evidence.note:
+        warnings.append(evidence.note)
+
+    return DeterministicResult(
+        summary=build_summary(parsed, groups, runtime),
+        events=events,
+        groups=groups,
+        evidence=evidence,
+        warnings=warnings,
+    )
+
+
+def stage_evidence(
+    *,
+    events: list[LogEvent],
+    groups: list[ErrorGroup],
+    redactor: Redactor,
+    settings: Settings,
+) -> EvidenceBundle:
+    """Select the bounded evidence set for the model (SPEC §7.8)."""
+    return select_evidence(
         events=events,
         groups=groups,
         redactor=redactor,
         max_chars=settings.max_evidence_chars,
         max_groups=settings.max_groups_for_model,
     )
-    if evidence.truncated and evidence.note:
-        warnings.append(evidence.note)
 
-    # --- 6. Summary -----------------------------------------------------
+
+def build_summary(
+    parsed: ParsedStage,
+    groups: list[ErrorGroup],
+    runtime: Runtime,
+) -> DeterministicSummary:
+    """Build the deterministic summary from the parsed stage and groups."""
     error_count = sum(
         1 for g in groups if g.severity in {Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM}
     )
     warning_count = sum(1 for g in groups if g.severity is Severity.LOW)
-    summary = DeterministicSummary(
-        total_lines=len(text.splitlines()),
-        total_events=len(events),
+
+    return DeterministicSummary(
+        total_lines=parsed.total_lines,
+        total_events=len(parsed.events),
         error_group_count=error_count,
         warning_group_count=warning_count,
         runtime=runtime,
-        detected_runtime=detected,
-    )
-
-    return DeterministicResult(
-        summary=summary,
-        events=events,
-        groups=groups,
-        evidence=evidence,
-        warnings=warnings,
+        detected_runtime=parsed.detected_runtime,
     )
 
 
@@ -164,6 +245,14 @@ def redact_event_text(event: LogEvent) -> str:
 __all__ = [
     "DeterministicResult",
     "LogLevel",
+    "ParsedStage",
     "analyze",
+    "build_redactor",
+    "build_summary",
     "redact_event_text",
+    "redact_events",
+    "stage_evidence",
+    "stage_group",
+    "stage_parse",
+    "stage_rank",
 ]

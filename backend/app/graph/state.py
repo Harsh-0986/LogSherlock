@@ -11,6 +11,7 @@ from app.logengine.models import (
     EvidenceBundle,
     LogEvent,
 )
+from app.logengine.pipeline import ParsedStage
 
 
 class ProcessingStep(TypedDict):
@@ -36,6 +37,8 @@ class InvestigationState(TypedDict, total=False):
     requested_runtime: str
 
     # --- Deterministic outputs ---
+    #: Internal payload from parse_logs, consumed by rank_errors.
+    parsed_stage: ParsedStage
     summary: DeterministicSummary
     events: list[LogEvent]
     groups: list[ErrorGroup]
