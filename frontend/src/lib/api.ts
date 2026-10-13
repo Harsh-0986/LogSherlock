@@ -2,11 +2,32 @@
  * Typed client for the LogSherlock backend.
  *
  * The frontend never talks to the model runtime directly (SPEC §5.2) — every
- * call goes through the FastAPI backend at NEXT_PUBLIC_API_BASE_URL.
+ * call goes through the FastAPI backend at NEXT_PUBLIC_API_BASE_URL, which is
+ * read from frontend/.env.local (see .env.example).
+ *
+ * Note: this must be written as a literal `process.env.NEXT_PUBLIC_...`
+ * lookup. Next.js only inlines statically analysable references — a computed
+ * lookup such as `process.env[name]` would silently be undefined in the
+ * browser.
+ *
+ * NEXT_PUBLIC_* values are inlined at BUILD time, so changing .env.local
+ * requires a rebuild, not just a reload.
  */
 
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8000";
+const FALLBACK_API_BASE_URL = "http://127.0.0.1:8000";
+
+const configured = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
+
+export const API_BASE_URL = (configured || FALLBACK_API_BASE_URL).replace(/\/+$/, "");
+
+if (!configured && process.env.NODE_ENV === "development") {
+  // A typo'd variable name would otherwise fail silently against localhost,
+  // which looks like a backend outage rather than a config mistake.
+  console.warn(
+    `[LogSherlock] NEXT_PUBLIC_API_BASE_URL is not set; falling back to ${FALLBACK_API_BASE_URL}. ` +
+      `Copy frontend/.env.example to frontend/.env.local to configure it.`,
+  );
+}
 
 /** SPEC §10.9 error envelope. Every non-2xx response uses this shape. */
 export interface ApiErrorBody {
