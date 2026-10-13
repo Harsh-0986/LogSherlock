@@ -13,30 +13,55 @@ import re
 
 from app.logengine.models import ErrorGroup, LogEvent, LogLevel, Severity
 
-# Explicit fatal conditions.
-_CRITICAL_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(
-        r"(?i)\b(out of memory|oom|cannot allocate memory|disk (?:is )?full|"
-        r"no space left on device|panic|fatal error|unrecoverable)\b"
+# Explicit fatal conditions. Each entry pairs a pattern with the explanation shown
+# to the user. The pattern itself is developer-facing and must never be shown.
+_CRITICAL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"(?i)\b(out of memory|oom|cannot allocate memory|disk (?:is )?full|"
+            r"no space left on device|panic|fatal error|unrecoverable)\b"
+        ),
+        "A resource was exhausted or the process could not continue",
     ),
-    re.compile(r"(?i)\b(segmentation fault|core dumped|access violation|stack overflow)\b"),
-    re.compile(
-        r"(?i)\b(service unavailable|503 service unavailable"
-        r"|all (?:replicas|workers) (?:are )?down)\b"
+    (
+        re.compile(r"(?i)\b(segmentation fault|core dumped|access violation|stack overflow)\b"),
+        "The process faulted at the operating-system level",
+    ),
+    (
+        re.compile(
+            r"(?i)\b(service unavailable|503 service unavailable"
+            r"|all (?:replicas|workers) (?:are )?down)\b"
+        ),
+        "The service reported itself unavailable",
     ),
 )
 
 # Failed critical dependencies.
-_HIGH_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(
-        r"(?i)\b(connection (?:refused|reset|closed|failed)|could not connect|"
-        r"unable to connect|connection (?:pool )?exhausted|timeout (?:expired)?)\b"
+_HIGH_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"(?i)\b(connection (?:refused|reset|closed|failed)|could not connect|"
+            r"unable to connect|connection (?:pool )?exhausted|timeout (?:expired)?)\b"
+        ),
+        "A connection to a dependency was refused or timed out",
     ),
-    re.compile(
-        r"(?i)\b(sql|database|postgres|postgresql|mysql|mongo|redis)\b.*\b(error|failed|refused)\b"
+    (
+        re.compile(
+            r"(?i)\b(sql|database|postgres|postgresql|mysql|mongo|redis)\b"
+            r".*\b(error|failed|refused)\b"
+        ),
+        "A database or cache operation failed",
     ),
-    re.compile(r"(?i)\b(unhandled (?:exception|rejection|promise)|unhandled promise rejection)\b"),
-    re.compile(r"(?i)\b(deadlock|lock wait timeout|cannot start a transaction)\b"),
+    (
+        re.compile(
+            r"(?i)\b(unhandled (?:exception|rejection|promise)|unhandled promise rejection)\b"
+        ),
+        "An exception was not handled by the application",
+    ),
+    (
+        re.compile(r"(?i)\b(deadlock|lock wait timeout|cannot start a transaction)\b"),
+        "A database lock or transaction could not be acquired",
+    ),
 )
 
 # Count thresholds for repeated occurrences.
@@ -53,11 +78,14 @@ _BENIGN_EXCEPTIONS: tuple[str, ...] = (
 )
 
 
-def _has_pattern(text: str, patterns: tuple[re.Pattern[str], ...]) -> re.Pattern[str] | None:
-    """Return the first matching pattern, or None."""
-    for pattern in patterns:
+def _match_reason(
+    text: str,
+    patterns: tuple[tuple[re.Pattern[str], str], ...],
+) -> str | None:
+    """Return the user-facing reason for the first matching pattern, or None."""
+    for pattern, reason in patterns:
         if pattern.search(text):
-            return pattern
+            return reason
     return None
 
 
@@ -80,9 +108,9 @@ def assign_severity(group_events: list[LogEvent]) -> tuple[Severity, str]:
     if highest is LogLevel.FATAL:
         return Severity.CRITICAL, f"Fatal-level log events ({count} occurrences)"
 
-    matched = _has_pattern(haystack, _CRITICAL_PATTERNS)
-    if matched is not None:
-        return Severity.CRITICAL, f"Critical condition detected: {matched.pattern[:60]}"
+    critical_reason = _match_reason(haystack, _CRITICAL_PATTERNS)
+    if critical_reason is not None:
+        return Severity.CRITICAL, critical_reason
 
     if count >= _CRITICAL_COUNT and highest is LogLevel.ERROR:
         return (
@@ -94,9 +122,9 @@ def assign_severity(group_events: list[LogEvent]) -> tuple[Severity, str]:
     if any(t.lower() in _BENIGN_EXCEPTIONS for t in exception_types):
         return Severity.LOW, "Benign/cancellation exception type"
 
-    matched = _has_pattern(haystack, _HIGH_PATTERNS)
-    if matched is not None:
-        return Severity.HIGH, f"Critical dependency failure: {matched.pattern[:60]}"
+    high_reason = _match_reason(haystack, _HIGH_PATTERNS)
+    if high_reason is not None:
+        return Severity.HIGH, high_reason
 
     if any(
         et and et.lower().endswith(("timeouterror", "connectionerror", "connectionrefused"))

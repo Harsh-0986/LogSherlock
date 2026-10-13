@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from app.logengine.models import Runtime
 from app.logengine.pipeline import analyze
+from app.models.base import ModelUnavailableError
 
 
 class TestPipelineDeterministic:
@@ -107,3 +108,54 @@ class TestPipelineDeterministic:
         result = analyze(text=text, settings=settings)
         assert result.groups == []
         assert result.summary.total_events == 1
+
+
+class TestUserFacingOutput:
+    """Guards on what the report actually shows a user."""
+
+    def test_severity_reason_never_leaks_a_regex(self, settings, sample_node_log: str) -> None:
+        """The severity reason is prose, not a developer-facing pattern."""
+        import re
+
+        result = analyze(text=sample_node_log, settings=settings)
+        for group in result.groups:
+            reason = group.severity_reason
+            assert "(?i)" not in reason, reason
+            assert "\\b" not in reason, reason
+            assert "(?:" not in reason, reason
+            assert not re.search(r"[\\^$|{}]", reason), reason
+
+    def test_line_count_is_consistent(self, settings, sample_node_log: str) -> None:
+        """A trailing newline must not make the report disagree with itself."""
+        from app.logengine.pipeline import count_lines
+
+        result = analyze(text=sample_node_log, settings=settings)
+        assert result.summary.total_lines == count_lines(sample_node_log)
+
+    def test_trailing_newline_adds_no_phantom_line(self) -> None:
+        """A file ending in a newline has N lines, not N+1."""
+        from app.logengine.pipeline import count_lines
+
+        assert count_lines("a\nb\nc\n") == 3
+        assert count_lines("a\nb\nc") == 3
+
+    def test_step_summary_agrees_with_report(self, settings, sample_node_log: str) -> None:
+        """The validate_input step and the report must report the same number."""
+        import asyncio
+
+        from fake_model import FakeModel
+
+        from app.config import Settings as _Settings
+        from app.graph.builder import run_investigation
+
+        async def run() -> dict:
+            return await run_investigation(
+                FakeModel(error=ModelUnavailableError("offline")),
+                investigation_id="inv_x",
+                raw_input=sample_node_log,
+                settings=_Settings(app_env="test"),
+            )
+
+        state = asyncio.run(run())
+        step = next(s for s in state["processing_steps"] if s["step"] == "validate_input")
+        assert f"{state['summary'].total_lines} lines" in step["summary"]

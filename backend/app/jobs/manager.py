@@ -27,6 +27,7 @@ from app.core.errors import (
 from app.core.ids import new_finding_id, new_investigation_id, utc_now
 from app.graph.builder import run_investigation
 from app.logengine.models import Runtime
+from app.logengine.pipeline import count_lines
 from app.models.base import BaseChatModel
 from app.models.registry import build_model
 from app.store.base import InvestigationRecord, InvestigationStore
@@ -158,7 +159,7 @@ class JobManager:
                 details={"max_bytes": settings.max_upload_bytes},
             )
 
-        line_count = content.count("\n") + 1
+        line_count = count_lines(content)
         if line_count > settings.max_log_lines:
             raise PayloadTooLargeError(
                 f"Log content has {line_count} lines, above the "

@@ -67,6 +67,16 @@ class ParsedStage:
     warnings: list[str] = field(default_factory=list)
 
 
+def count_lines(text: str) -> int:
+    """Count lines consistently.
+
+    Uses ``splitlines`` so a trailing newline does not report a phantom extra
+    line. Input-limit checks must not disagree with the reported total, so they
+    use this too.
+    """
+    return len(text.splitlines())
+
+
 def build_redactor(settings: Settings) -> Redactor:
     """Return the configured redactor."""
     return Redactor(
@@ -114,7 +124,7 @@ def stage_parse(*, text: str, runtime: Runtime = Runtime.AUTO) -> ParsedStage:
         events=events,
         detected_runtime=detected,
         requested_runtime=runtime,
-        total_lines=len(text.splitlines()),
+        total_lines=count_lines(text),
         warnings=warnings,
     )
 
@@ -249,6 +259,7 @@ __all__ = [
     "analyze",
     "build_redactor",
     "build_summary",
+    "count_lines",
     "redact_event_text",
     "redact_events",
     "stage_evidence",

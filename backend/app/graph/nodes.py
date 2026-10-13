@@ -20,6 +20,7 @@ from app.logengine.models import DeterministicSummary, Runtime, Severity
 from app.logengine.pipeline import (
     ParsedStage,
     build_redactor,
+    count_lines,
     redact_events,
     stage_evidence,
     stage_group,
@@ -90,7 +91,7 @@ def validate_input(state: InvestigationState) -> dict[str, Any]:
             details={"max_bytes": max_bytes},
         )
 
-    line_count = raw.count("\n") + 1
+    line_count = count_lines(raw)
     if line_count > settings.max_log_lines:
         raise PayloadTooLargeError(
             f"Log content has {line_count} lines, above the {settings.max_log_lines} line limit.",
