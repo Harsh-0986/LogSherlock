@@ -6,47 +6,145 @@
   A case-file aesthetic: findings on the left, cited log lines docked to the
   right. Colour is reserved for one job — severity — so the eye goes straight to
   what matters. Everything else is ink on slate.
+
+  THEME MODEL
+  -----------
+  Every colour is a CSS custom property emitted by Tailwind's @theme block, so
+  Tailwind utilities compile to `var(--color-*)`. That means a light theme needs
+  only a variable override — no duplicated utility classes anywhere.
+
+  Three states, in priority order:
+    1. explicit user choice  -> <html data-theme="dark|light">
+    2. OS preference        -> prefers-color-scheme, only when no explicit choice
+    3. dark                 -> the fallback
 */
 
 @theme {
-  /* --- Surfaces: cool slate-blue-black, never pure black ---------------- */
   --color-base: #0e1116;
   --color-panel: #141920;
   --color-raised: #1b2129;
   --color-edge: #232b35;
   --color-edge-bright: #323c49;
 
-  /* --- Ink -------------------------------------------------------------- */
   --color-ink: #e6eaf0;
   --color-ink-dim: #9aa6b8;
   --color-ink-faint: #6b7789;
 
-  /* --- Severity heat ramp: the one place colour is spent --------------- */
+  /* Severity heat ramp: the one place colour is spent. */
   --color-critical: #f2555a;
   --color-high: #ff9e64;
   --color-medium: #e5c07b;
   --color-low: #6fa8dc;
   --color-info: #5c6673;
 
-  /* --- Interactive accent, used sparingly ------------------------------- */
   --color-accent: #4da3ff;
 
   --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-@layer base {
-  html {
-    color-scheme: dark;
-  }
+/*
+  Translucent surfaces.
 
+  These must NOT be @theme tokens. Two traps:
+
+  1. A Tailwind opacity modifier like `bg-base/90` compiles to a literal hex
+     (#0e1116e6), so it cannot follow a theme override.
+  2. `color-mix(... var(--color-base) ...)` is also folded at build time against
+     the @theme value, producing the same literal.
+
+  Declaring them as plain custom properties and referencing them with a bare
+  `var()` keeps the value unresolved until the browser paints, so each theme
+  supplies its own.
+*/
+:root {
+  color-scheme: dark;
+
+  --surface-nav: rgb(14 17 22 / 0.9);
+  --surface-scrim: rgb(14 17 22 / 0.7);
+  --surface-drop: rgb(14 17 22 / 0.85);
+
+  --sev-ring-critical: rgb(242 85 90 / 0.4);
+  --sev-ring-critical-strong: rgb(242 85 90 / 0.5);
+  --sev-ring-medium: rgb(229 192 123 / 0.3);
+  --sev-ring-accent: rgb(77 163 255 / 0.4);
+}
+
+/* --- Light: explicit choice -------------------------------------------- */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-base: #ffffff;
+  --color-panel: #fafafa;
+  --color-raised: #f1f3f5;
+  --color-edge: #e2e5e9;
+  --color-edge-bright: #aab1bb;
+
+  --color-ink: #171a1f;
+  --color-ink-dim: #4d5560;
+  --color-ink-faint: #6b7280;
+
+  /* Darkened so every severity still clears 4.5:1 on white. */
+  --color-critical: #c2262c;
+  --color-high: #9a4a06;
+  --color-medium: #7a5c05;
+  --color-low: #1a5fb4;
+  --color-info: #5b6472;
+
+  --color-accent: #0969da;
+
+  --surface-nav: rgb(255 255 255 / 0.9);
+  --surface-scrim: rgb(255 255 255 / 0.72);
+  --surface-drop: rgb(255 255 255 / 0.88);
+
+  --sev-ring-critical: rgb(194 38 44 / 0.45);
+  --sev-ring-critical-strong: rgb(194 38 44 / 0.55);
+  --sev-ring-medium: rgb(122 92 5 / 0.35);
+  --sev-ring-accent: rgb(9 105 218 / 0.45);
+}
+
+/* --- Light: follow the OS, but never override an explicit choice -------- */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+
+    --color-base: #ffffff;
+    --color-panel: #fafafa;
+    --color-raised: #f1f3f5;
+    --color-edge: #e2e5e9;
+    --color-edge-bright: #aab1bb;
+
+    --color-ink: #171a1f;
+    --color-ink-dim: #4d5560;
+    --color-ink-faint: #6b7280;
+
+    --color-critical: #c2262c;
+    --color-high: #9a4a06;
+    --color-medium: #7a5c05;
+    --color-low: #1a5fb4;
+    --color-info: #5b6472;
+
+    --color-accent: #0969da;
+
+    --surface-nav: rgb(255 255 255 / 0.9);
+    --surface-scrim: rgb(255 255 255 / 0.72);
+    --surface-drop: rgb(255 255 255 / 0.88);
+
+    --sev-ring-critical: rgb(194 38 44 / 0.45);
+    --sev-ring-critical-strong: rgb(194 38 44 / 0.55);
+    --sev-ring-medium: rgb(122 92 5 / 0.35);
+    --sev-ring-accent: rgb(9 105 218 / 0.45);
+  }
+}
+
+@layer base {
   body {
     background-color: var(--color-base);
     color: var(--color-ink);
     -webkit-font-smoothing: antialiased;
   }
 
-  /* Keyboard focus must always be visible. */
+  /* Keyboard focus must always be visible in both themes. */
   :focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
@@ -58,18 +156,38 @@
   }
 }
 
-@layer components {
-  /* A severity marker: a 2px left edge, never a badge. Carries meaning
-     without adding visual weight to the content beside it. */
-  .sev-edge {
-    border-left: 2px solid var(--sev-color, var(--color-info));
+  /*
+    Translucent surfaces and severity rings resolve their colours at paint time,
+    so they follow whichever theme is active. See the note beside the variable
+    declarations above for why these are not @theme tokens.
+  */
+  .surface-nav {
+    background-color: var(--surface-nav);
   }
 
-  /* Hairline rule used to separate evidence lines. */
-  .evidence-rule {
-    border-left: 1px solid var(--color-edge);
+  .surface-scrim {
+    background-color: var(--surface-scrim);
   }
-}
+
+  .surface-drop {
+    background-color: var(--surface-drop);
+  }
+
+  .sev-ring-critical {
+    border-color: var(--sev-ring-critical);
+  }
+
+  .sev-ring-critical-strong {
+    border-color: var(--sev-ring-critical-strong);
+  }
+
+  .sev-ring-medium {
+    border-color: var(--sev-ring-medium);
+  }
+
+  .sev-ring-accent {
+    border-color: var(--sev-ring-accent);
+  }
 
 /* Respect reduced motion. Motion here only ever reflects real state change. */
 @media (prefers-reduced-motion: reduce) {

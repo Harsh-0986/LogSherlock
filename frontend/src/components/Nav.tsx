@@ -8,7 +8,7 @@ import { NavLinks } from "@/components/NavLinks";
  */
 export function Nav() {
   return (
-    <header className="sticky top-0 z-40 border-b border-edge bg-base/90 backdrop-blur">
+    <header className="sticky top-0 z-40 border-b border-edge surface-nav backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center gap-6 px-6 py-3">
         <Link href="/" className="flex items-baseline gap-2">
           <span className="font-mono text-sm font-medium tracking-tight">LogSherlock</span>

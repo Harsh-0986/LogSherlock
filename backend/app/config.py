@@ -52,7 +52,12 @@ class Settings(BaseSettings):
     model_name: str = "qwen3:1.7b"
     model_timeout_seconds: int = 90
     model_temperature: float = 0.1
-    model_max_output_tokens: int = 2048
+    #: Reasoning models draw this budget from the same output allowance, so it
+    #: must cover thinking AND the answer. Raise it if findings arrive empty.
+    model_max_output_tokens: int = 8192
+    #: Leave unset (None) to send no thinking_config at all; some Gemma builds
+    #: reject the parameter. Set an int only where it is documented to work.
+    model_thinking_budget: int | None = None
 
     # --- Input limits (SPEC §7.2) ------------------------------------------
     max_upload_mb: int = 5

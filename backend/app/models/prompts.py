@@ -8,7 +8,6 @@ model could call.
 
 from __future__ import annotations
 
-from app.graph.schemas import ModelReport
 from app.logengine.evidence import format_evidence_for_prompt
 from app.logengine.models import ErrorGroup, EvidenceBundle
 
@@ -53,6 +52,11 @@ def build_user_prompt(
     context: str | None = None,
 ) -> str:
     """Build the user message: deterministic facts plus bounded evidence."""
+    # Imported here, not at module scope: app.graph.schemas sits under the
+    # app.graph package whose __init__ imports the nodes, which import this
+    # module. A top-level import would be circular.
+    from app.graph.schemas import ModelReport
+
     sections: list[str] = []
 
     if context:

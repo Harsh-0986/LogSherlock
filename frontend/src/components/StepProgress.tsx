@@ -69,7 +69,7 @@ function StatusIcon({ status }: { status: ProcessingStep["status"] }) {
       );
     case "failed":
       return (
-        <span className="mt-0.5 flex h-4 w-4 items-center justify-center rounded-full border border-critical/50">
+        <span className="mt-0.5 flex h-4 w-4 items-center justify-center rounded-full border sev-ring-critical-strong">
           <XCircle className="h-2.5 w-2.5 text-critical" aria-hidden />
         </span>
       );

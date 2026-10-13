@@ -225,7 +225,7 @@ function AnalyzeView() {
             />
 
             {dragging && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded bg-base/85">
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded surface-drop">
                 <span className="flex items-center gap-2 text-sm text-ink">
                   <FileUp className="h-4 w-4" aria-hidden />
                   Drop to load
@@ -331,7 +331,7 @@ function AnalyzeView() {
 
           <p className="border-t border-edge pt-4 text-xs leading-relaxed text-ink-faint">
             Looking for a starting point?{" "}
-            <Link href="/?sample=1" className="text-ink-dim hover:text-ink">
+            <Link href="/analyze?sample=1" className="text-ink-dim hover:text-ink">
               Load a sample log
             </Link>
             .

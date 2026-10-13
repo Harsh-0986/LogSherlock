@@ -39,6 +39,7 @@ def _build_google(settings: Settings) -> BaseChatModel:
         timeout_seconds=settings.model_timeout_seconds,
         temperature=settings.model_temperature,
         max_output_tokens=settings.model_max_output_tokens,
+        thinking_budget=settings.model_thinking_budget,
     )
 
 

@@ -109,7 +109,7 @@ export default function SettingsPage() {
       </section>
 
       {!status?.available && (
-        <section className="mt-6 rounded border border-medium/30 bg-panel px-5 py-4">
+        <section className="mt-6 rounded border sev-ring-medium bg-panel px-5 py-4">
           <h2 className="text-sm font-medium text-medium">
             Analyses still work without a model
           </h2>

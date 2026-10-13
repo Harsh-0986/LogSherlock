@@ -171,13 +171,13 @@ function InvestigationView() {
             <SummaryBar report={report} />
 
             {report.status === "failed" && report.error_message && (
-              <p className="mt-4 rounded border border-critical/40 bg-panel px-3 py-2 text-sm text-critical">
+              <p className="mt-4 rounded border sev-ring-critical bg-panel px-3 py-2 text-sm text-critical">
                 {report.error_message}
               </p>
             )}
 
             {!report.ai_analysis_performed && report.ai_skipped_reason && (
-              <div className="mt-4 rounded border border-medium/30 bg-panel px-3 py-2.5">
+              <div className="mt-4 rounded border sev-ring-medium bg-panel px-3 py-2.5">
                 <p className="text-sm font-medium text-medium">No AI analysis in this report</p>
                 <p className="mt-1 text-sm text-ink-dim">{report.ai_skipped_reason}</p>
                 <p className="mt-1.5 text-xs text-ink-faint">

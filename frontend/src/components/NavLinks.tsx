@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api, type ModelStatus } from "@/lib/api";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 const LINKS = [
   { href: "/", label: "Overview" },
@@ -57,8 +58,9 @@ export function NavLinks() {
         })}
       </nav>
 
-      <div className="ml-auto">
+      <div className="ml-auto flex items-center gap-3">
         <ModelIndicator status={model} />
+        <ThemeToggle />
       </div>
     </>
   );

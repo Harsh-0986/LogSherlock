@@ -172,12 +172,12 @@ export default function HomePage() {
 function StatusPill({ status }: { status: string }) {
   const tone =
     status === "failed"
-      ? "text-critical border-critical/40"
+      ? "text-critical sev-ring-critical"
       : status === "partial"
-        ? "text-medium border-medium/40"
+        ? "text-medium sev-ring-medium"
         : status === "completed"
           ? "text-ink-dim border-edge-bright"
-          : "text-accent border-accent/40";
+          : "text-accent sev-ring-accent";
 
   return (
     <span className={`rounded border px-1.5 py-0.5 font-mono text-[11px] ${tone}`}>

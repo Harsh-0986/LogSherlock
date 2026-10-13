@@ -38,7 +38,7 @@ export function EvidenceDrawer({ evidence, onClose }: EvidenceDrawerProps) {
     <>
       {/* Scrim: only on narrow screens, where the drawer overlays content. */}
       <div
-        className="fixed inset-0 z-20 bg-base/70 backdrop-blur-[1px] lg:hidden"
+        className="fixed inset-0 z-20 surface-scrim backdrop-blur-[1px] lg:hidden"
         onClick={onClose}
         aria-hidden
       />
