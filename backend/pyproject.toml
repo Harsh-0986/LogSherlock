@@ -33,6 +33,14 @@ dev = [
     "ruff>=0.8",
     "anyio>=4.6",
 ]
+# Postgres driver for managed databases (Render Postgres, Neon, Supabase...).
+# Optional because SQLite needs no driver and is the local default.
+#
+# NOTE: this path is NOT covered by the test suite — there is no Postgres
+# instance in CI. The SQLAlchemy models and store are dialect-neutral (SQLite
+# appears only in connection args and PRAGMAs), but verify against a real
+# instance before relying on it.
+postgres = ["psycopg[binary]>=3.2"]
 
 [build-system]
 requires = ["hatchling"]

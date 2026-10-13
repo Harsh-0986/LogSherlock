@@ -263,6 +263,59 @@ Every value is documented in `backend/.env.example`. The ones that matter:
 
 ---
 
+## Deploying
+
+`render.yaml` is a Render blueprint for the backend. It exists because Render
+defaults to its newest Python (3.14 at time of writing), which does not satisfy
+`requires-python = ">=3.12,<3.14"`:
+
+```
+error: No interpreter found for Python >=3.12, <3.14 in search path
+```
+
+The constraint is doing its job — 3.14 is untested here. Rather than widening it,
+the blueprint pins `pythonVersion: 3.12.12`, which `backend/.python-version` also
+records for local `uv`.
+
+Deploy via **Render → Blueprints → New → select this repo**, then fill in the
+three `sync: false` variables (`FRONTEND_ORIGIN`, `MODEL_NAME`, `MODEL_API_KEY`).
+
+Two settings that are easy to get wrong:
+
+- **`FRONTEND_ORIGIN` must match your deployed frontend origin exactly**, or
+  every browser request fails the CORS preflight.
+- **A `VIRTUAL_ENV` warning during build is harmless.** Render pre-creates a venv
+  at its own path; uv ignores it and builds `.venv` in the project, which is what
+  the start command uses.
+
+### SQLite does not survive a redeploy
+
+Render's filesystem is ephemeral: every restart and every redeploy deletes
+`logsherlock.db`, taking saved investigations with it. Local development is
+unaffected, but in production this breaks the "reports survive restarts"
+requirement.
+
+To keep history, attach a managed Postgres and point `DATABASE_URL` at it:
+
+```bash
+uv sync --extra postgres
+```
+
+```dotenv
+DATABASE_URL=postgresql+psycopg://user:pass@host:5432/logsheclock
+```
+
+Render sets `DATABASE_URL` automatically for a database you attach. The models
+and store are dialect-neutral — SQLite appears only in connection arguments and
+`PRAGMA`s.
+
+> **Not verified.** There is no Postgres instance in the test suite, so this path
+> is untested. The driver imports and the engine constructs, but run the test
+> suite against a real instance before relying on it.
+
+The frontend is a separate deployment; it only needs `NEXT_PUBLIC_API_BASE_URL`
+pointing at this service.
+
 ## Known limitations
 
 Stated because they matter more than a feature list:
@@ -277,6 +330,12 @@ Stated because they matter more than a feature list:
 - **Redaction is best-effort.** Documented above; do not treat it as a guarantee.
 - **The job manager holds raw input in memory** for the duration of a run. It is
   cleared in a `finally` block, but a core dump would contain it.
+- **SQLite is ephemeral on Render.** Saved investigations are lost on every
+  restart and redeploy unless `DATABASE_URL` points at a managed database. See
+  the Deploying section above.
+- **The Postgres path is untested** — there is no Postgres instance in CI. The
+  driver imports and the engine builds, but that is not the same as a verified
+  run.
 - **`npm audit` reports 5 high-severity advisories**, all dev-only, in the ESLint
   toolchain (`fast-glob` → `micatch` → `braces`). No runtime dependency is
   affected. `npm audit fix --force` would break the build.

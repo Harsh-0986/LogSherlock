@@ -1,0 +1,73 @@
+# Render blueprint for the LogSherlock backend.
+#
+# Why this file exists: Render defaults to its own newest Python (3.14 at the
+# time of writing), which does not satisfy `requires-python = ">=3.12,<3.14"`.
+# Rather than widening a constraint we have not tested against, the platform is
+# pinned to a version we did test (3.12.x).
+#
+# Configure via the Render dashboard: Blueprints -> New -> select this repo.
+services:
+  - type: web
+    name: logsherlock-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    region: oregon
+
+    # Must satisfy backend/pyproject.toml `requires-python`.
+    # Keep in sync with backend/.python-version.
+    pythonVersion: 3.12.12
+
+    # --frozen fails loudly if uv.lock and pyproject.toml disagree, instead of
+    # silently resolving new versions during a production build.
+    # The `postgres` extra adds the driver. Drop it if you stay on SQLite.
+    buildCommand: uv sync --frozen --extra postgres
+
+    # Migrations run first so a fresh deploy always has the schema. Then bind
+    # 0.0.0.0 on $PORT — binding 127.0.0.1 is unreachable from Render's proxy.
+    startCommand: >-
+      uv run --frozen --no-sync alembic upgrade head
+      && uv run --frozen --no-sync uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.12
+
+      - key: APP_ENV
+        value: production
+
+      # Comma-separated allow-list. Set this to the deployed frontend origin,
+      # or every browser request fails the CORS preflight.
+      - key: FRONTEND_ORIGIN
+        sync: false
+
+      # SQLite on Render's filesystem is EPHEMERAL: every restart and every
+      # redeploy wipes saved investigations, which breaks SPEC §11.5 in
+      # production even though it holds locally.
+      #
+      # To keep history across deploys, attach a managed Postgres and replace
+      # this with its URL, e.g.:
+      #   postgresql+psycopg://user:pass@host:5432/logsheclock
+      # Render also sets DATABASE_URL automatically for databases you attach.
+      - key: DATABASE_URL
+        value: sqlite:///./logsherlock.db
+
+      # Model configuration. Nothing is sent to a provider that is not set here.
+      - key: MODEL_PROVIDER
+        value: ollama
+
+      - key: MODEL_NAME
+        sync: false
+
+      # Leave empty for a local Ollama (no credential required).
+      - key: MODEL_API_KEY
+        sync: false
+
+      # Raw logs are NOT stored unless this is explicitly enabled.
+      - key: PERSIST_RAW_LOGS
+        value: "false"
+
+      - key: REDACTION_ENABLED
+        value: "true"
