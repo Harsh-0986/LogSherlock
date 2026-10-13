@@ -1,0 +1,20 @@
+- generic [active] [ref=e1]:
+  - main [ref=e2]:
+    - generic [ref=e3]:
+      - heading "LogSherlock" [level=1] [ref=e4]
+      - paragraph [ref=e5]: Turn raw application logs into an actionable debugging report, backed by evidence.
+    - generic [ref=e6]:
+      - heading "Phase 1 — connectivity check" [level=2] [ref=e7]
+      - generic [ref=e8]:
+        - generic [ref=e9]:
+          - term [ref=e10]: Backend
+          - definition [ref=e11]:
+            - generic [ref=e12]: checking
+        - generic [ref=e15]:
+          - term [ref=e16]: Model
+          - definition [ref=e17]: not reported
+    - generic [ref=e18]:
+      - text: Logs are processed locally and redacted before any model submission.
+      - link "Analyze logs →" [ref=e22] [cursor=pointer]:
+        - /url: /analyze
+  - alert [ref=e23]
