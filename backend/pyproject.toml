@@ -72,7 +72,14 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # B008: FastAPI's Depends() in argument defaults is the documented pattern.
 "app/api/v1/*.py" = ["B008"]
-"tests/*" = ["D100", "D101", "D102", "D103", "S101"]
+# S105: these are redaction PLACEHOLDERS, not real credentials.
+"app/logengine/redaction.py" = ["S105"]
+"tests/*" = [
+    "D100", "D101", "D102", "D103", "D104",
+    "S101",
+    # Fixture files contain verbatim log lines; long lines are the point.
+    "E501",
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -87,6 +94,7 @@ known-first-party = ["app"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-q --strict-markers"
+pythonpath = ["tests"]
 filterwarnings = [
     "ignore::DeprecationWarning:langchain.*",
 ]
