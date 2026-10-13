@@ -24,7 +24,7 @@ from app.core.errors import (
     PayloadTooLargeError,
     RateLimitedError,
 )
-from app.core.ids import new_investigation_id, utc_now
+from app.core.ids import new_finding_id, new_investigation_id, utc_now
 from app.graph.builder import run_investigation
 from app.logengine.models import Runtime
 from app.models.base import BaseChatModel
@@ -304,7 +304,12 @@ class JobManager:
             from app.graph.nodes import build_fallback_findings
 
             findings = build_fallback_findings(record.error_groups)
-        record.findings = findings
+
+        # Findings need stable ids before they reach the API or the database.
+        # Deterministic findings are built without one, so assign it here.
+        record.findings = [
+            {**finding, "id": finding.get("id") or new_finding_id()} for finding in findings
+        ]
 
         if summary is not None:
             record.summary = (

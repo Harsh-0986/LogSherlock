@@ -74,6 +74,9 @@ ignore = [
 "app/api/v1/*.py" = ["B008"]
 # S105: these are redaction PLACEHOLDERS, not real credentials.
 "app/logengine/redaction.py" = ["S105"]
+# Tests deliberately contain token-shaped fixtures to prove redaction works.
+"tests/test_persistence.py" = ["S105"]
+"tests/test_privacy.py" = ["S105"]
 "tests/*" = [
     "D100", "D101", "D102", "D103", "D104",
     "S101",
