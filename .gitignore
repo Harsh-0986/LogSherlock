@@ -59,3 +59,9 @@ Thumbs.db
 # ---- Misc ----
 *.log
 !.env.example
+
+# `*.log` is for runtime logs. These are fixtures and shipped assets that are
+# required by the test suite and by the "load a sample log" button; without
+# them a fresh clone cannot run its own tests.
+!samples/*.log
+!frontend/public/sample.log
