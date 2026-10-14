@@ -267,3 +267,69 @@ class TestApiWithDatabase:
 
         dispose_all()
         get_settings.cache_clear()
+
+
+class TestLiveProgressFields:
+    """Fields the status endpoint serves must survive the database.
+
+    `current_step` used to exist on the record and be returned by the API while
+    never being a column, so under SQLAlchemy it was always None and the UI
+    showed no progress at all.
+    """
+
+    async def test_current_step_is_persisted_and_readable(self, tmp_path) -> None:
+        url = f"sqlite:///{tmp_path / 'progress.db'}"
+        store = SqlAlchemyStore(url)
+
+        record = InvestigationRecord("inv_progress")
+        record.created_at = "2026-10-13T09:30:00+00:00"
+        record.status = "running"
+        record.current_step = "investigate_with_model"
+        store.create(record)
+
+        reloaded = SqlAlchemyStore(url).get("inv_progress")
+        assert reloaded is not None
+        assert reloaded.current_step == "investigate_with_model"
+
+        record.current_step = None
+        record.status = "completed"
+        store.update(record)
+        assert SqlAlchemyStore(url).get("inv_progress").current_step is None
+        dispose_all()
+
+    async def test_status_endpoint_reports_current_step_while_running(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """End to end: the value the UI polls must not be null mid-run."""
+        import asyncio
+
+        url = f"sqlite:///{tmp_path / 'live.db'}"
+        monkeypatch.setenv("APP_ENV", "development")
+        monkeypatch.setenv("DATABASE_URL", url)
+        monkeypatch.setenv("MAX_CONCURRENT_INVESTIGATIONS", "8")
+
+        from app.config import get_settings
+
+        get_settings.cache_clear()
+        with TestClient(create_app()) as client:
+            investigation_id = client.post(
+                "/api/v1/investigations", json={"content": SAMPLE}
+            ).json()["id"]
+
+            observed: list[str | None] = []
+            for _ in range(2000):
+                status = client.get(
+                    f"/api/v1/investigations/{investigation_id}/status"
+                ).json()
+                observed.append(status["current_step"])
+                if status["status"] in TERMINAL:
+                    break
+                await asyncio.sleep(0.005)
+
+            assert any(step is not None for step in observed), (
+                "current_step stayed null for the whole run; the UI cannot show progress"
+            )
+            assert observed[-1] is None
+
+        dispose_all()
+        get_settings.cache_clear()

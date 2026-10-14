@@ -169,6 +169,7 @@ class SqlAlchemyStore(InvestigationStore):
         row.validation_errors_json = _dumps(record.validation_errors or [])
         row.ai_skipped_reason = record.ai_skipped_reason
         row.error_message = record.error_message
+        row.current_step = record.current_step
         row.evidence_json = _dumps([e.model_dump(mode="json") for e in record.evidence])
         row.ai_analysis_performed = bool(record.model_response and record.findings)
 
@@ -271,6 +272,7 @@ class SqlAlchemyStore(InvestigationStore):
         record.validation_errors = _loads(row.validation_errors_json, [])
         record.ai_skipped_reason = row.ai_skipped_reason
         record.error_message = row.error_message
+        record.current_step = row.current_step
         record.raw_input = row.raw_input
         record.created_at = row.created_at.isoformat() if row.created_at else None
         record.completed_at = row.completed_at.isoformat() if row.completed_at else None

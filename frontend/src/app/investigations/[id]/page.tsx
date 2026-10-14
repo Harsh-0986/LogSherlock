@@ -124,6 +124,11 @@ function InvestigationView() {
     [report, selectedEvidenceId],
   );
 
+  // A finding may cite a line the evidence bundle does not carry. Clicking it
+  // must not be a silent no-op.
+  const selectedCitationMissing =
+    selectedEvidenceId !== null && !selectedEvidence;
+
   if (error) {
     return (
       <Shell>
@@ -299,14 +304,40 @@ function InvestigationView() {
         </div>
 
         {/* --- Evidence drawer ----------------------------------------- */}
-        <div className="lg:pt-6">
+        {/* Two constraints the panel needs on wide screens:
+            - a fixed width, or the flex child collapses to its content and the
+              panel reads as a footnote under the report;
+            - sticky, matching the placeholder. The drawer itself is
+              `lg:static`, so without this the panel would render at the top of
+              the column while the reader is scrolled past it - which looked
+              like the drawer never opened at all.
+            Also `lg:flex` + a capped height so the drawer's own scroll region
+            is bounded instead of running off the bottom of the viewport. */}
+        <div className="lg:sticky lg:top-20 lg:flex lg:max-h-[calc(100vh-6rem)] lg:w-[26rem] lg:shrink-0 lg:self-start lg:pt-6">
           {selectedEvidence ? (
             <EvidenceDrawer
               evidence={selectedEvidence}
               onClose={() => setSelectedEvidenceId(null)}
             />
+          ) : selectedCitationMissing ? (
+            <div className="rounded border border-medium/40 bg-panel px-5 py-6 text-center">
+              <p className="text-sm font-medium text-medium">
+                {selectedEvidenceId} is not in the evidence set
+              </p>
+              <p className="mt-1.5 text-xs leading-relaxed text-ink-dim">
+                The model cited a line that was not selected for display. Open the
+                original log at that line to check the claim yourself.
+              </p>
+              <button
+                type="button"
+                onClick={() => setSelectedEvidenceId(null)}
+                className="mt-3 rounded border border-edge px-2 py-1 text-xs text-ink-dim hover:text-ink"
+              >
+                Back to report
+              </button>
+            </div>
           ) : (
-            <div className="sticky top-20 hidden rounded border border-dashed border-edge px-5 py-10 text-center lg:block">
+            <div className="hidden rounded border border-dashed border-edge px-5 py-10 text-center lg:block">
               <FileSearch className="mx-auto h-5 w-5 text-ink-faint" aria-hidden />
               <p className="mt-3 text-sm text-ink-dim">Evidence appears here.</p>
               <p className="mt-1 text-xs text-ink-faint">

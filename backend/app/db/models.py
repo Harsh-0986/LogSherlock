@@ -59,6 +59,8 @@ class Investigation(Base):
     validation_errors_json: Mapped[str | None] = mapped_column(Text)
     ai_skipped_reason: Mapped[str | None] = mapped_column(Text)
     error_message: Mapped[str | None] = mapped_column(Text)
+    #: Graph node currently executing, so the UI can show live progress.
+    current_step: Mapped[str | None] = mapped_column(String(64))
 
     #: The redacted evidence bundle, as JSON. Stored so a saved report can be
     #: reconstructed and its citations re-verified without the original log.
