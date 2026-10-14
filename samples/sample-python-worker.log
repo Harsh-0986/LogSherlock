@@ -1,0 +1,214 @@
+2026-10-13 09:14:02,114 - INFO - shopstream.main - Starting ShopStream v3.2.1 on worker-7
+2026-10-13 09:14:02,201 - INFO - shopstream.db - Pool created min_size=5 max_size=20
+2026-10-13 09:15:44,019 - WARNING - shopstream.cache - Redis connection slow: 340ms to 10.42.7.19:6379
+2026-10-13 09:16:02,004 - ERROR - shopstream.orders - Failed to persist order 88213
+Traceback (most recent call last):
+  File "/srv/shopstream/app/orders/service.py", line 142, in create_order
+    order = await self.repo.insert(order)
+  File "/srv/shopstream/app/orders/repository.py", line 88, in insert
+    async with self.pool.acquire() as conn:
+  File "/srv/shopstream/app/db/pool.py", line 61, in acquire
+    conn = await self._connect()
+  File "/srv/shopstream/app/db/pool.py", line 44, in _connect
+    raise ConnectionError(f"could not connect to server: {self.dsn}")
+ConnectionError: could not connect to server: Connection refused
+	Is the server running on host "postgres-primary" (10.42.2.15) and accepting TCP/IP connections on port 5432?
+2026-10-13 09:16:31,220 - ERROR - shopstream.orders - Failed to persist order 88214
+Traceback (most recent call last):
+  File "/srv/shopstream/app/orders/service.py", line 142, in create_order
+    order = await self.repo.insert(order)
+  File "/srv/shopstream/app/orders/repository.py", line 88, in insert
+    async with self.pool.acquire() as conn:
+  File "/srv/shopstream/app/db/pool.py", line 61, in acquire
+    conn = await self._connect()
+  File "/srv/shopstream/app/db/pool.py", line 44, in _connect
+    raise ConnectionError(f"could not connect to server: {self.dsn}")
+ConnectionError: could not connect to server: Connection refused
+	Is the server running on host "postgres-primary" (10.42.2.15) and accepting TCP/IP connections on port 5432?
+2026-10-13 09:16:44,900 - INFO - shopstream.cache - Cache hit for key orders:88213
+2026-10-13 09:17:05,331 - ERROR - shopstream.orders - Failed to persist order 88215
+Traceback (most recent call last):
+  File "/srv/shopstream/app/orders/service.py", line 142, in create_order
+    order = await self.repo.insert(order)
+  File "/srv/shopstream/app/orders/repository.py", line 88, in insert
+    async with self.pool.acquire() as conn:
+  File "/srv/shopstream/app/db/pool.py", line 61, in acquire
+    conn = await self._connect()
+  File "/srv/shopstream/app/db/pool.py", line 44, in _connect
+    raise ConnectionError(f"could not connect to server: {self.dsn}")
+ConnectionError: could not connect to server: Connection refused
+	Is the server running on host "postgres-primary" (10.42.2.15) and accepting TCP/IP connections on port 5432?
+2026-10-13 09:17:22,008 - WARNING - shopstream.orders - Retrying order 88215 after 1.0s
+2026-10-13 09:17:38,447 - ERROR - shopstream.orders - Failed to persist order 88216
+Traceback (most recent call last):
+  File "/srv/shopstream/app/orders/service.py", line 142, in create_order
+    order = await self.repo.insert(order)
+  File "/srv/shopstream/app/orders/repository.py", line 88, in insert
+    async with self.pool.acquire() as conn:
+  File "/srv/shopstream/app/db/pool.py", line 61, in acquire
+    conn = await self._connect()
+  File "/srv/shopstream/app/db/pool.py", line 44, in _connect
+    raise ConnectionError(f"could not connect to server: {self.dsn}")
+ConnectionError: could not connect to server: Connection refused
+	Is the server running on host "postgres-primary" (10.42.2.15) and accepting TCP/IP connections on port 5432?
+2026-10-13 09:17:51,220 - ERROR - shopstream.notifications - SMTP delivery failed for invoice 88213
+Traceback (most recent call last):
+  File "/srv/shopstream/app/notifications/mailer.py", line 210, in send_invoice
+    await self.smtp.send_message(msg)
+  File "/srv/shopstream/app/notifications/mailer.py", line 96, in send_message
+    raise SMTPDataError(code, response)
+smtplib.SMTPDataError: (421, b'Try again later')
+2026-10-13 09:18:04,660 - INFO - shopstream.main - Health probe OK
+2026-10-13 09:18:19,113 - ERROR - shopstream.orders - Failed to persist order 88217
+Traceback (most recent call last):
+  File "/srv/shopstream/app/orders/service.py", line 142, in create_order
+    order = await self.repo.insert(order)
+  File "/srv/shopstream/app/orders/repository.py", line 88, in insert
+    async with self.pool.acquire() as conn:
+  File "/srv/shopstream/app/db/pool.py", line 61, in acquire
+    conn = await self._connect()
+  File "/srv/shopstream/app/db/pool.py", line 44, in _connect
+    raise ConnectionError(f"could not connect to server: {self.dsn}")
+ConnectionError: could not connect to server: Connection refused
+	Is the server running on host "postgres-primary" (10.42.2.15) and accepting TCP/IP connections on port 5432?
+2026-10-13 09:18:33,900 - WARNING - shopstream.pool - Connection pool exhausted: 20/20 in use, 14 waiting
+2026-10-13 09:18:47,220 - ERROR - shopstream.orders - Failed to persist order 88218
+Traceback (most recent call last):
+  File "/srv/shopstream/app/orders/service.py", line 142, in create_order
+    order = await self.repo.insert(order)
+  File "/srv/shopstream/app/orders/repository.py", line 88, in insert
+    async with self.pool.acquire() as conn:
+  File "/srv/shopstream/app/db/pool.py", line 61, in acquire
+    conn = await self._connect()
+  File "/srv/shopstream/app/db/pool.py", line 44, in _connect
+    raise ConnectionError(f"could not connect to server: {self.dsn}")
+ConnectionError: could not connect to server: Connection refused
+	Is the server running on host "postgres-primary" (10.42.2.15) and accepting TCP/IP connections on port 5432?
+2026-10-13 09:19:02,441 - ERROR - shopstream.notifications - SMTP delivery failed for invoice 88214
+Traceback (most recent call last):
+  File "/srv/shopstream/app/notifications/mailer.py", line 210, in send_invoice
+    await self.smtp.send_message(msg)
+  File "/srv/shopstream/app/notifications/mailer.py", line 96, in send_message
+    raise SMTPDataError(code, response)
+smtplib.SMTPDataError: (421, b'Try again later')
+2026-10-13 09:19:14,008 - INFO - shopstream.main - Health probe OK
+2026-10-13 09:19:28,776 - ERROR - shopstream.orders - Failed to persist order 88219
+Traceback (most recent call last):
+  File "/srv/shopstream/app/orders/service.py", line 142, in create_order
+    order = await self.repo.insert(order)
+  File "/srv/shopstream/app/orders/repository.py", line 88, in insert
+    async with self.pool.acquire() as conn:
+  File "/srv/shopstream/app/db/pool.py", line 61, in acquire
+    conn = await self._connect()
+  File "/srv/shopstream/app/db/pool.py", line 44, in _connect
+    raise ConnectionError(f"could not connect to server: {self.dsn}")
+ConnectionError: could not connect to server: Connection refused
+	Is the server running on host "postgres-primary" (10.42.2.15) and accepting TCP/IP connections on port 5432?
+2026-10-13 09:19:41,220 - WARNING - shopstream.orders - Retrying order 88219 after 1.0s
+2026-10-13 09:19:55,667 - ERROR - shopstream.orders - Failed to persist order 88220
+Traceback (most recent call last):
+  File "/srv/shopstream/app/orders/service.py", line 142, in create_order
+    order = await self.repo.insert(order)
+  File "/srv/shopstream/app/orders/repository.py", line 88, in insert
+    async with self.pool.acquire() as conn:
+  File "/srv/shopstream/app/db/pool.py", line 61, in acquire
+    conn = await self._connect()
+  File "/srv/shopstream/app/db/pool.py", line 44, in _connect
+    raise ConnectionError(f"could not connect to server: {self.dsn}")
+ConnectionError: could not connect to server: Connection refused
+	Is the server running on host "postgres-primary" (10.42.2.15) and accepting TCP/IP connections on port 5432?
+2026-10-13 09:20:08,114 - INFO - shopstream.main - Health probe OK
+2026-10-13 09:20:22,903 - ERROR - shopstream.notifications - SMTP delivery failed for invoice 88215
+Traceback (most recent call last):
+  File "/srv/shopstream/app/notifications/mailer.py", line 210, in send_invoice
+    await self.smtp.send_message(msg)
+  File "/srv/shopstream/app/notifications/mailer.py", line 96, in send_message
+    raise SMTPDataError(code, response)
+smtplib.SMTPDataError: (421, b'Try again later')
+2026-10-13 09:20:36,441 - WARNING - shopstream.pool - Connection pool exhausted: 20/20 in use, 19 waiting
+2026-10-13 09:20:50,008 - ERROR - shopstream.orders - Failed to persist order 88221
+Traceback (most recent call last):
+  File "/srv/shopstream/app/orders/service.py", line 142, in create_order
+    order = await self.repo.insert(order)
+  File "/srv/shopstream/app/orders/repository.py", line 88, in insert
+    async with self.pool.acquire() as conn:
+  File "/srv/shopstream/app/db/pool.py", line 61, in acquire
+    conn = await self._connect()
+  File "/srv/shopstream/app/db/pool.py", line 44, in _connect
+    raise ConnectionError(f"could not connect to server: {self.dsn}")
+ConnectionError: could not connect to server: Connection refused
+	Is the server running on host "postgres-primary" (10.42.2.15) and accepting TCP/IP connections on port 5432?
+2026-10-13 09:21:03,776 - WARNING - shopstream.orders - Retrying order 88221 after 1.0s
+2026-10-13 09:21:19,442 - INFO - shopstream.main - Health probe OK
+2026-10-13 09:21:33,115 - ERROR - shopstream.notifications - SMTP delivery failed for invoice 88216
+Traceback (most recent call last):
+  File "/srv/shopstream/app/notifications/mailer.py", line 210, in send_invoice
+    await self.smtp.send_message(msg)
+  File "/srv/shopstream/app/notifications/mailer.py", line 96, in send_message
+    raise SMTPDataError(code, response)
+smtplib.SMTPDataError: (421, b'Try again later')
+2026-10-13 09:21:47,889 - ERROR - shopstream.orders - Failed to persist order 88222
+Traceback (most recent call last):
+  File "/srv/shopstream/app/orders/service.py", line 142, in create_order
+    order = await self.repo.insert(order)
+  File "/srv/shopstream/app/orders/repository.py", line 88, in insert
+    async with self.pool.acquire() as conn:
+  File "/srv/shopstream/app/db/pool.py", line 61, in acquire
+    conn = await self._connect()
+  File "/srv/shopstream/app/db/pool.py", line 44, in _connect
+    raise ConnectionError(f"could not connect to server: {self.dsn}")
+ConnectionError: could not connect to server: Connection refused
+	Is the server running on host "postgres-primary" (10.42.2.15) and accepting TCP/IP connections on port 5432?
+2026-10-13 09:22:02,331 - WARNING - shopstream.pool - Connection pool exhausted: 20/20 in use, 20 waiting
+2026-10-13 09:22:16,558 - ERROR - shopstream.orders - Failed to persist order 88223
+Traceback (most recent call last):
+  File "/srv/shopstream/app/orders/service.py", line 142, in create_order
+    order = await self.repo.insert(order)
+  File "/srv/shopstream/app/orders/repository.py", line 88, in insert
+    async with self.pool.acquire() as conn:
+  File "/srv/shopstream/app/db/pool.py", line 61, in acquire
+    conn = await self._connect()
+  File "/srv/shopstream/app/db/pool.py", line 44, in _connect
+    raise ConnectionError(f"could not connect to server: {self.dsn}")
+ConnectionError: could not connect to server: Connection refused
+	Is the server running on host "postgres-primary" (10.42.2.15) and accepting TCP/IP connections on port 5432?
+2026-10-13 09:22:30,004 - ERROR - shopstream.notifications - SMTP delivery failed for invoice 88217
+Traceback (most recent call last):
+  File "/srv/shopstream/app/notifications/mailer.py", line 210, in send_invoice
+    await self.smtp.send_message(msg)
+  File "/srv/shopstream/app/notifications/mailer.py", line 96, in send_message
+    raise SMTPDataError(code, response)
+smtplib.SMTPDataError: (421, b'Try again later')
+2026-10-13 09:22:44,776 - ERROR - shopstream.orders - Failed to persist order 88224
+Traceback (most recent call last):
+  File "/srv/shopstream/app/orders/service.py", line 142, in create_order
+    order = await self.repo.insert(order)
+  File "/srv/shopstream/app/orders/repository.py", line 88, in insert
+    async with self.pool.acquire() as conn:
+  File "/srv/shopstream/app/db/pool.py", line 61, in acquire
+    conn = await self._connect()
+  File "/srv/shopstream/app/db/pool.py", line 44, in _connect
+    raise ConnectionError(f"could not connect to server: {self.dsn}")
+ConnectionError: could not connect to server: Connection refused
+	Is the server running on host "postgres-primary" (10.42.2.15) and accepting TCP/IP connections on port 5432?
+2026-10-13 09:22:58,112 - INFO - shopstream.main - Health probe OK
+2026-10-13 09:23:12,447 - WARNING - shopstream.orders - Order queue depth 340, backlog growing
+2026-10-13 09:23:26,883 - ERROR - shopstream.notifications - SMTP delivery failed for invoice 88218
+Traceback (most recent call last):
+  File "/srv/shopstream/app/notifications/mailer.py", line 210, in send_invoice
+    await self.smtp.send_message(msg)
+  File "/srv/shopstream/app/notifications/mailer.py", line 96, in send_message
+    raise SMTPDataError(code, response)
+smtplib.SMTPDataError: (421, b'Try again later')
+2026-10-13 09:23:41,220 - ERROR - shopstream.orders - Failed to persist order 88225
+Traceback (most recent call last):
+  File "/srv/shopstream/app/orders/service.py", line 142, in create_order
+    order = await self.repo.insert(order)
+  File "/srv/shopstream/app/orders/repository.py", line 88, in insert
+    async with self.pool.acquire() as conn:
+  File "/srv/shopstream/app/db/pool.py", line 61, in acquire
+    conn = await self._connect()
+  File "/srv/shopstream/app/db/pool.py", line 44, in _connect
+    raise ConnectionError(f"could not connect to server: {self.dsn}")
+ConnectionError: could not connect to server: Connection refused
+	Is the server running on host "postgres-primary" (10.42.2.15) and accepting TCP/IP connections on port 5432?
