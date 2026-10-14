@@ -1,16 +1,22 @@
 """Deterministic validation of model output (SPEC §9.2).
 
-This module is the real enforcement boundary. The prompt asks for valid output;
+This module is the real enforcement boundary. The prompt asks for good output;
 this code decides what is actually allowed through.
 
-Three classes of fabrication are rejected:
+Four classes of fabrication are rejected:
 1. **Unknown evidence ids** — a citation must resolve to a line we supplied.
 2. **Unknown fingerprints** — a finding must refer to a group we computed.
-3. **Count/severity contradictions** — the model must not overwrite the
-   deterministic observation (SPEC §7.7).
+3. **No citations at all** — a log-derived claim with no evidence is discarded.
+4. **Citations from another group** — a finding cannot lean on a neighbour's
+   lines as if they were its own.
+
+Each finding is validated independently, so one bad finding never discards the
+others.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass, field
 
 from app.graph.schemas import Finding, ModelReport
 from app.logengine.models import ErrorGroup
@@ -19,18 +25,17 @@ VALID_CONFIDENCE = frozenset({"low", "medium", "high"})
 VALID_SEVERITY = frozenset({"critical", "high", "medium", "low", "info"})
 
 
+@dataclass(slots=True)
 class ValidationOutcome:
     """Result of validating model output against deterministic facts."""
 
-    def __init__(self) -> None:
-        """Initialize an empty outcome."""
-        self.errors: list[str] = []
-        self.findings: list[Finding] = []
-        self.discarded: list[Finding] = []
+    findings: list[Finding] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    discarded: list[Finding] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
-        """True when the output can be used as-is."""
+        """True when nothing at all had to be rejected."""
         return not self.errors
 
     @property
@@ -39,112 +44,197 @@ class ValidationOutcome:
         return bool(self.findings)
 
 
+def validate_finding(
+    raw: dict[str, object],
+    *,
+    group: ErrorGroup,
+    valid_evidence_ids: set[str],
+) -> tuple[Finding | None, list[str]]:
+    """Validate one finding against one group.
+
+    Returns:
+        The accepted finding (with severity forced to the deterministic value)
+        and the list of reasons it was rejected. The finding is ``None`` when
+        any reason is present.
+    """
+    errors: list[str] = []
+
+    # The model does not get to choose which group it explains; we know.
+    raw = {**raw, "fingerprint": group.fingerprint}
+
+    try:
+        finding = Finding.model_validate(raw)
+    except Exception as exc:  # pydantic raises ValidationError
+        errors.append(f"{group.title[:40]!r}: schema invalid ({_short(exc)})")
+        return None, errors
+
+    errors.extend(_problems(finding, group=group, valid_evidence_ids=valid_evidence_ids))
+    if errors:
+        return None, errors
+
+    # Severity is deterministic; the model may comment but not overwrite it.
+    return (
+        finding.model_copy(
+            update={
+                "severity": group.severity.value,
+                "evidence_ids": [
+                    e for e in finding.evidence_ids if e in valid_evidence_ids
+                ],
+            }
+        ),
+        errors,
+    )
+
+
+def validate_findings(
+    raw_findings: list[dict[str, object]],
+    *,
+    groups: list[ErrorGroup],
+    valid_evidence_ids: set[str],
+) -> ValidationOutcome:
+    """Validate a batch of per-group findings independently.
+
+    A group the model failed to address simply produces no finding; it is not an
+    error, because partial coverage is expected and useful.
+    """
+    outcome = ValidationOutcome()
+    by_title: dict[str, ErrorGroup] = {}
+
+    for raw in raw_findings:
+        if not isinstance(raw, dict):
+            outcome.errors.append("Model returned a non-object finding.")
+            continue
+
+        group = _match_group(raw, groups, by_title)
+        if group is None:
+            outcome.errors.append(
+                f"Finding {str(raw.get('title', ''))[:40]!r} does not correspond to any "
+                "supplied error group."
+            )
+            continue
+
+        finding, problems = validate_finding(
+            raw, group=group, valid_evidence_ids=valid_evidence_ids
+        )
+        if finding is not None:
+            outcome.findings.append(finding)
+        else:
+            outcome.errors.extend(problems)
+
+    return outcome
+
+
+def _match_group(
+    raw: dict[str, object],
+    groups: list[ErrorGroup],
+    seen: dict[str, ErrorGroup],
+) -> ErrorGroup | None:
+    """Resolve which supplied group a raw finding is about.
+
+    Per-group calls stamp the fingerprint themselves, so that is the normal
+    path. Title matching is only a fallback for a response that arrived without
+    one, and it never guesses when nothing lines up.
+    """
+    fingerprint = raw.get("fingerprint")
+    if isinstance(fingerprint, str):
+        for group in groups:
+            if group.fingerprint == fingerprint:
+                return group
+
+    title = str(raw.get("title", "")).strip().lower()
+    if not title:
+        return None
+
+    if title in seen:
+        return seen[title]
+
+    for group in groups:
+        if group.title.strip().lower() == title:
+            seen[title] = group
+            return group
+
+    # Models often reword the title. Fall back to a distinctive prefix.
+    prefix = " ".join(title.split()[:5])
+    for group in groups:
+        if prefix and group.title.strip().lower().startswith(prefix):
+            seen[title] = group
+            return group
+
+    return None
+
+
+def _problems(
+    finding: Finding,
+    *,
+    group: ErrorGroup,
+    valid_evidence_ids: set[str],
+) -> list[str]:
+    """Return the reasons a finding is unusable. Empty means valid."""
+    problems: list[str] = []
+
+    fabricated = [e for e in finding.evidence_ids if e not in valid_evidence_ids]
+    if fabricated:
+        problems.append(
+            f"{group.title[:40]!r} cites evidence ids that were never supplied: "
+            f"{fabricated[:5]}"
+        )
+
+    if not finding.evidence_ids:
+        problems.append(f"{group.title[:40]!r} cites no evidence.")
+
+    if finding.confidence not in VALID_CONFIDENCE:
+        problems.append(
+            f"{group.title[:40]!r} has invalid confidence {finding.confidence!r}."
+        )
+
+    # A finding may cite context lines attached to its own group, but it must
+    # cite at least one of the group's own event lines.
+    group_lines = set(group.evidence_ids)
+    if finding.evidence_ids and not any(e in group_lines for e in finding.evidence_ids):
+        problems.append(
+            f"{group.title[:40]!r} cites only evidence outside its own group."
+        )
+
+    return problems
+
+
 def validate_report(
     raw: dict[str, object],
     *,
     groups: list[ErrorGroup],
     valid_evidence_ids: set[str],
 ) -> ValidationOutcome:
-    """Validate a decoded model report against the deterministic analysis.
-
-    Structural problems (bad JSON shape) land in ``errors``. Individual findings
-    that merely misbehave are dropped into ``discarded`` so one bad finding does
-    not throw away the whole report.
-    """
+    """Validate a single-report-shaped response (retained for compatibility)."""
     outcome = ValidationOutcome()
-
-    # --- Structural validation -----------------------------------------
     try:
         report = ModelReport.model_validate(raw)
-    except Exception as exc:
+    except Exception as exc:  # pydantic raises ValidationError
         outcome.errors.append(f"Schema validation failed: {_short(exc)}")
         return outcome
 
-    group_by_fp = {g.fingerprint: g for g in groups}
-
+    by_fp = {g.fingerprint: g for g in groups}
     for finding in report.findings:
-        problems = _validate_finding(
-            finding,
-            group_by_fp=group_by_fp,
+        group = by_fp.get(finding.fingerprint)
+        if group is None:
+            outcome.errors.append(
+                f"Finding {finding.title[:40]!r} cites unknown fingerprint "
+                f"{finding.fingerprint!r}."
+            )
+            outcome.discarded.append(finding)
+            continue
+        accepted, problems = validate_finding(
+            finding.model_dump(mode="json"),
+            group=group,
             valid_evidence_ids=valid_evidence_ids,
         )
-        if problems:
-            outcome.discarded.append(finding)
+        if accepted is not None:
+            outcome.findings.append(accepted)
+        else:
             outcome.errors.extend(problems)
-            continue
-
-        group = group_by_fp[finding.fingerprint]
-        # Force the deterministic values. The model may comment on severity,
-        # but the reported severity must be the one we computed.
-        outcome.findings.append(
-            finding.model_copy(
-                update={
-                    "severity": group.severity.value,
-                    "evidence_ids": [
-                        eid for eid in finding.evidence_ids if eid in valid_evidence_ids
-                    ],
-                }
-            )
-        )
-
+            outcome.discarded.append(finding)
     return outcome
 
 
-def _validate_finding(
-    finding: Finding,
-    *,
-    group_by_fp: dict[str, ErrorGroup],
-    valid_evidence_ids: set[str],
-) -> list[str]:
-    """Return the reasons a single finding is unusable. Empty means valid."""
-    problems: list[str] = []
-
-    # 1. Fabricated group reference.
-    if finding.fingerprint not in group_by_fp:
-        problems.append(
-            f"Finding {finding.title!r} cites unknown fingerprint {finding.fingerprint!r}; "
-            f"valid fingerprints: {sorted(group_by_fp)[:8]}"
-        )
-        return problems  # nothing else can be checked without a group
-
-    group = group_by_fp[finding.fingerprint]
-
-    # 2. Fabricated evidence references.
-    fabricated = [eid for eid in finding.evidence_ids if eid not in valid_evidence_ids]
-    if fabricated:
-        problems.append(
-            f"Finding {finding.title!r} cites evidence ids that were never supplied: "
-            f"{fabricated[:5]}"
-        )
-
-    # 3. No evidence at all for a log-derived claim.
-    if not finding.evidence_ids:
-        problems.append(f"Finding {finding.title!r} cites no evidence.")
-
-    # 4. Confidence outside the allowed set (also enforced by pydantic, but the
-    #    repaired/partial path needs it too).
-    if finding.confidence not in VALID_CONFIDENCE:
-        problems.append(f"Finding {finding.title!r} has invalid confidence {finding.confidence!r}.")
-
-    # 5. The cited evidence must belong to this group, or be a context line the
-    #    backend attached to it. A finding cannot lean on a *different* group's
-    #    lines as if they were its own.
-    group_ids = set(group.evidence_ids)
-    stray = [
-        eid for eid in finding.evidence_ids if eid in valid_evidence_ids and eid not in group_ids
-    ]
-    if stray and not _has_any_group_line(finding, group_ids):
-        problems.append(f"Finding {finding.title!r} cites only evidence outside its own group.")
-
-    return problems
-
-
-def _has_any_group_line(finding: Finding, group_ids: set[str]) -> bool:
-    """Whether the finding cites at least one line from its own group."""
-    return any(eid in group_ids for eid in finding.evidence_ids)
-
-
-def _short(exc: Exception, limit: int = 400) -> str:
+def _short(exc: Exception, limit: int = 300) -> str:
     """Trim a pydantic error message so it can go in the repair prompt."""
-    text = str(exc).replace("\n", " ")
-    return text[:limit]
+    return str(exc).replace("\n", " ")[:limit]

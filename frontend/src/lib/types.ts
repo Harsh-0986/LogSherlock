@@ -102,6 +102,8 @@ export interface InvestigationReport {
 
   ai_skipped_reason: string | null;
   ai_analysis_performed: boolean;
+  retry_count: number;
+  can_retry: boolean;
 
   raw_input_included: boolean;
   raw_input: string | null;

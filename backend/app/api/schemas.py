@@ -203,6 +203,10 @@ class InvestigationReportResponse(BaseModel):
     #: True when the model's own summary is shown; false means it was generated
     #: deterministically because inference was unavailable.
     ai_analysis_performed: bool = False
+    #: How many AI retries have run for this investigation.
+    retry_count: int = 0
+    #: Whether the UI should offer a retry right now.
+    can_retry: bool = False
 
     raw_input_included: bool = False
     raw_input: str | None = None

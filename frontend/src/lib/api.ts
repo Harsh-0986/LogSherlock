@@ -186,6 +186,11 @@ export const api = {
     );
   },
 
+  retryAi: (id: string) =>
+    request<StartInvestigationResponse>(`/api/v1/investigations/${id}/retry-ai`, {
+      method: "POST",
+    }),
+
   deleteInvestigation: (id: string) =>
     request<void>(`/api/v1/investigations/${id}`, { method: "DELETE" }),
 };

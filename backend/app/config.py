@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     #: Leave unset (None) to send no thinking_config at all; some Gemma builds
     #: reject the parameter. Set an int only where it is documented to work.
     model_thinking_budget: int | None = None
+    #: Pause between per-group model calls. Firing every request at once
+    #: invites provider rate limits and burns quota on a run that may be
+    #: abandoned. Sequential calls with a small stagger are deliberate.
+    model_call_stagger_seconds: float = 1.5
 
     # --- Input limits (SPEC §7.2) ------------------------------------------
     max_upload_mb: int = 5

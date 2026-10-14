@@ -25,8 +25,12 @@ from app.core.errors import (
     RateLimitedError,
 )
 from app.core.ids import new_finding_id, new_investigation_id, utc_now
-from app.graph.builder import run_investigation
-from app.logengine.models import Runtime
+from app.graph.builder import (
+    run_investigation,
+    stream_ai_retry,
+    stream_investigation,
+)
+from app.logengine.models import EvidenceBundle, Runtime
 from app.logengine.pipeline import count_lines
 from app.models.base import BaseChatModel
 from app.models.registry import build_model
@@ -129,6 +133,137 @@ class JobManager:
         if not self._store.delete(investigation_id):
             raise NotFoundError(f"Investigation {investigation_id} was not found.")
 
+    def retry_ai(self, investigation_id: str) -> InvestigationRecord:
+        """Re-run only the AI stage against an already-analysed investigation.
+
+        Raw logs are not persisted (SPEC 11.5), so a retry reuses the stored
+        groups and evidence rather than re-parsing. Only groups the previous run
+        did not explain are attempted, so a retry costs a fraction of the
+        original and never repeats work that already succeeded.
+        """
+        record = self.get(investigation_id)
+
+        if record.status == "running":
+            raise RateLimitedError("This investigation is already running.")
+
+        if not record.error_groups:
+            raise InvalidInputError(
+                "This investigation has no error groups to re-analyse."
+            )
+
+        self._enforce_concurrency()
+
+        task = asyncio.create_task(self._run_retry(record.id))
+        self._tasks[record.id] = task
+        task.add_done_callback(lambda _t, rid=record.id: self._tasks.pop(rid, None))
+
+        logger.info("investigation=%s AI retry queued", record.id)
+        return record
+
+    async def _run_retry(self, investigation_id: str) -> None:
+        """Execute the AI-only graph and merge the outcome."""
+        record = self._store.get(investigation_id)
+        if record is None:
+            return
+
+        record.status = "running"
+        record.current_step = "investigate_with_model"
+        record.retry_count += 1
+        self._store.update(record)
+
+        try:
+            model, _error = self._resolve_model()
+            evidence = EvidenceBundle(items=tuple(record.evidence), total_chars=0)
+
+            def _publish(update: dict[str, Any]) -> None:
+                steps = update.get("processing_steps")
+                if steps:
+                    record.processing_steps = list(steps)
+                record.current_step = _last_step(record.processing_steps)
+                self._store.update(record)
+
+            result = await asyncio.wait_for(
+                stream_ai_retry(
+                    model,
+                    investigation_id=record.id,
+                    groups=record.error_groups,
+                    evidence=evidence,
+                    settings=self._settings,
+                    warnings=record.warnings,
+                    on_step=_publish,
+                ),
+                timeout=GRAPH_WALL_CLOCK_SECONDS,
+            )
+
+            self._apply_retry_result(record, result)
+            logger.info(
+                "investigation=%s retry %s (%s findings)",
+                record.id, record.status, len(record.findings),
+            )
+
+        except TimeoutError:
+            record.status = "partial"
+            record.error_message = "The retry exceeded the time limit."
+            record.current_step = None
+            self._store.update(record)
+
+        except asyncio.CancelledError:
+            record.status = "partial"
+            record.current_step = None
+            self._store.update(record)
+            raise
+
+        except Exception as exc:  # keep the previous findings intact
+            logger.exception("investigation=%s retry failed: %s", record.id, type(exc).__name__)
+            record.status = "partial"
+            record.error_message = (
+                "The retry failed; the previous report is unchanged."
+            )
+            record.current_step = None
+            self._store.update(record)
+
+    def _apply_retry_result(self, record: InvestigationRecord, result: dict[str, Any]) -> None:
+        """Merge retry output, keeping the previous report if nothing improved."""
+        findings = [
+            {**f, "id": f.get("id") or new_finding_id(), "source": f.get("source") or "model"}
+            for f in (result.get("findings") or [])
+        ]
+        previous = len(record.findings)
+
+        if findings:
+            record.findings = findings
+            if result.get("evidence"):
+                record.evidence = list(result["evidence"].items)
+        elif previous:
+            # Nothing new survived validation: keep what the user already has.
+            record.warnings.append(
+                "The retry produced no findings that passed validation; "
+                "the previous report is unchanged."
+            )
+
+        # Only the AI stages ran, so report only their steps; replaying the
+        # deterministic ones would misdescribe what a retry did.
+        record.processing_steps = list(result.get("processing_steps") or [])
+        record.validation_errors = list(result.get("validation_errors") or [])
+        for failure in result.get("model_call_failures") or []:
+            record.warnings.append(f"AI retry could not explain a group - {failure}")
+
+        if findings or not previous:
+            record.status = "completed" if findings else "partial"
+            record.ai_skipped_reason = result.get("ai_skipped_reason")
+        else:
+            record.status = record.status if record.status != "queued" else "partial"
+
+        record.completed_at = result.get("completed_at") or record.completed_at
+        record.current_step = None
+        self._store.update(record)
+
+        if findings:
+            logger.info(
+                "investigation=%s retry improved findings %s -> %s",
+                record.id, previous, len(record.findings),
+            )
+
     async def shutdown(self) -> None:
         """Cancel outstanding work on application shutdown."""
         tasks = list(self._tasks.values())
@@ -186,7 +321,16 @@ class JobManager:
             )
 
     def _resolve_model(self) -> tuple[BaseChatModel | None, str | None]:
-        """Return the configured model, or the reason it is unavailable."""
+        """Return the configured model, or the reason it is unavailable.
+
+        Under APP_ENV=test no provider is ever contacted. Without this guard a
+        test run would build the real client from the environment and spend the
+        operator's quota, and would take minutes per test. Tests that need model
+        behaviour inject one explicitly.
+        """
+        if self._settings.is_test:
+            return _NoModel(), "Model calls are disabled when APP_ENV=test."
+
         if self._model is not None or self._model_error is not None:
             return self._model, self._model_error
         try:
@@ -222,13 +366,31 @@ class JobManager:
                 result["ai_skipped_reason"] = model_error
                 result["status"] = "partial"
             else:
+                def _publish(update: dict[str, Any]) -> None:
+                    """Persist progress after each node so the UI is live."""
+                    steps = update.get("processing_steps")
+                    if steps:
+                        record.processing_steps = list(steps)
+                    current = next(
+                        (
+                            s["step"]
+                            for s in reversed(record.processing_steps)
+                            if s.get("status") == "running"
+                        ),
+                        None,
+                    )
+                    record.current_step = current or _last_step(record.processing_steps)
+                    record.summary_detail = _partial_summary(record, update)
+                    self._store.update(record)
+
                 result = await asyncio.wait_for(
-                    run_investigation(
+                    stream_investigation(
                         model,
                         investigation_id=investigation_id,
                         raw_input=content,
                         settings=self._settings,
                         runtime=record.runtime or "auto",
+                        on_step=_publish,
                     ),
                     timeout=GRAPH_WALL_CLOCK_SECONDS,
                 )
@@ -304,7 +466,10 @@ class JobManager:
             # Deterministic fallback so the report is never empty of content.
             from app.graph.nodes import build_fallback_findings
 
-            findings = build_fallback_findings(record.error_groups)
+            findings = build_fallback_findings(
+                record.error_groups,
+                valid_evidence_ids={e.id for e in record.evidence},
+            )
 
         # Findings need stable ids before they reach the API or the database.
         # Deterministic findings are built without one, so assign it here.
@@ -320,6 +485,21 @@ class JobManager:
             )
 
         self._store.update(record)
+
+
+def _last_step(steps: list[dict[str, Any]]) -> str | None:
+    """Name of the most recently recorded step."""
+    return steps[-1]["step"] if steps else None
+
+
+def _partial_summary(record: InvestigationRecord, update: dict[str, Any]) -> Any:
+    """Carry the deterministic summary forward as soon as it exists.
+
+    Without this the header shows dashes for the whole AI stage even though the
+    counts were computed several steps earlier.
+    """
+    summary = update.get("summary")
+    return summary.model_dump(mode="json") if summary is not None else record.summary_detail
 
 
 class _NoModel(BaseChatModel):

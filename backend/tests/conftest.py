@@ -23,6 +23,8 @@ def settings() -> Settings:
         max_evidence_chars=16_000,
         max_groups_for_model=8,
         redaction_enabled=True,
+        # Never sleep for real in tests.
+        model_call_stagger_seconds=0.0,
     )
 
 

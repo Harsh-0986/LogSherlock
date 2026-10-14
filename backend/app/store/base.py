@@ -35,6 +35,7 @@ class InvestigationRecord:
         "processing_steps",
         "raw_input",
         "report",
+        "retry_count",
         "runtime",
         "status",
         "summary",
@@ -69,6 +70,7 @@ class InvestigationRecord:
         self.validation_errors: list[str] = []
         self.model_response: str | None = None
         self.raw_input: str | None = None
+        self.retry_count = 0
         self.current_step: str | None = None
         self.error_message: str | None = None
 

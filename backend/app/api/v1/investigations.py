@@ -214,6 +214,22 @@ def get_report(
     return _to_report(record, settings)
 
 
+@router.post("/{investigation_id}/retry-ai", response_model=StartInvestigationResponse)
+async def retry_ai_analysis(
+    investigation_id: str,
+    manager: JobManagerDep,
+) -> StartInvestigationResponse:
+    """Re-run the AI stage for an existing investigation.
+
+    Only the model stage is repeated: the stored groups and evidence are reused,
+    and only groups the previous run did not explain are attempted, so a retry
+    costs a fraction of the original and cannot repeat work that already
+    succeeded. The previous report is preserved if the retry yields nothing.
+    """
+    record = manager.retry_ai(investigation_id)
+    return StartInvestigationResponse(id=record.id, status="running")
+
+
 @router.delete("/{investigation_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_investigation(
     investigation_id: str,
@@ -290,7 +306,14 @@ def _to_report(record: InvestigationRecord, settings: Settings) -> Investigation
         model_provider=record.model_provider,
         model_name=record.model_name,
         ai_skipped_reason=record.ai_skipped_reason,
-        ai_analysis_performed=bool(record.model_response and record.findings),
+        ai_analysis_performed=any(
+            f.get("source", "model") == "model" for f in record.findings
+        ),
+        retry_count=record.retry_count,
+        can_retry=(
+            record.status not in {"running", "queued"}
+            and bool(record.error_groups)
+        ),
         raw_input_included=bool(settings.persist_raw_logs and record.raw_input),
         raw_input=record.raw_input if settings.persist_raw_logs else None,
     )

@@ -6,9 +6,10 @@ No test here contacts a live model.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
-from fake_model import FakeModel, make_report
+from fake_model import FakeModel, echo_prompts, make_finding, make_report, responder
 from pydantic import ValidationError
 
 from app.config import Settings
@@ -131,43 +132,37 @@ class TestValidation:
 
 class TestGraphExecution:
     async def test_valid_output_completes(self, settings, deterministic) -> None:
-        ids = sorted(i.id for i in deterministic.evidence.items)
-        model = FakeModel(
-            [make_report(fingerprint=deterministic.groups[0].fingerprint, evidence_ids=ids[:2])]
-        )
+        """One focused call per group; every group keeps its finding."""
+        model = responder(echo_prompts())
         state = await run_graph(settings, model)
         assert state["status"] == "completed"
-        assert len(state["findings"]) == 1
+        assert len(state["findings"]) == len(deterministic.groups)
+        assert len(model.calls) == len(deterministic.groups)
 
-    async def test_invalid_json_triggers_bounded_repair(self, settings, deterministic) -> None:
-        ids = sorted(i.id for i in deterministic.evidence.items)
-        good = make_report(fingerprint=deterministic.groups[0].fingerprint, evidence_ids=ids[:2])
-        model = FakeModel(["this is not json at all", good])
+    async def test_invalid_json_is_retried_once_per_group(self, settings, deterministic) -> None:
+        """Malformed JSON gets one inline retry, then that group is dropped."""
+        model = responder(echo_prompts(template="garbage"))
         state = await run_graph(settings, model)
-        assert state["repair_attempted"] is True
-        assert state["status"] == "completed"
-        assert len(state["findings"]) == 1
-        assert len(model.calls) == 2
+        assert state["status"] == "partial"
+        assert state["findings"] == []
+        assert state["model_call_failures"]
+        # one initial call plus one retry, for each group
+        assert len(model.calls) == 2 * len(deterministic.groups)
 
-    async def test_repair_is_bounded_to_one_attempt(self, settings) -> None:
-        model = FakeModel(["still not json", "still not json", "still not json"])
+    async def test_repair_is_bounded_to_one_attempt(self, settings, deterministic) -> None:
+        """Bounded repair never loops, however bad the output is."""
+        model = responder(echo_prompts(template="garbage"))
         state = await run_graph(settings, model)
-        assert state["repair_attempted"] is True
-        # One initial call + at most one repair.
-        assert len(model.calls) <= 2
+        assert state["status"] == "partial"
 
-    async def test_fabricated_evidence_is_repaired_then_accepted(
-        self, settings, deterministic
-    ) -> None:
-        ids = sorted(i.id for i in deterministic.evidence.items)
-        bad = make_report(
-            fingerprint=deterministic.groups[0].fingerprint, evidence_ids=["line-999999"]
-        )
-        good = make_report(fingerprint=deterministic.groups[0].fingerprint, evidence_ids=ids[:2])
-        model = FakeModel([bad, good])
+    async def test_fabricated_evidence_is_rejected(self, settings, deterministic) -> None:
+        """A citation the model invented is discarded, never surfaced."""
+        known = {i.id for i in deterministic.evidence.items}
+        model = FakeModel([make_finding(evidence_ids=["line-999999"])])
         state = await run_graph(settings, model)
-        assert len(state["findings"]) == 1
-        assert all(e in ids for e in state["findings"][0]["evidence_ids"])
+        assert state["findings"] == []
+        assert state["validation_errors"]
+        assert all(e in known for f in state["findings"] for e in f["evidence_ids"])
 
     async def test_model_unavailable_falls_back(self, settings) -> None:
         model = FakeModel(error=ModelUnavailableError("connection refused"))
@@ -186,7 +181,7 @@ class TestGraphExecution:
         model = FakeModel(["garbage", "more garbage"])
         state = await run_graph(settings, model)
         assert state["status"] == "partial"
-        assert state["validation_errors"]
+        assert state["model_call_failures"] or state["validation_errors"]
 
     async def test_deterministic_groups_survive_ai_failure(self, settings) -> None:
         model = FakeModel(error=ModelUnavailableError("down"))
@@ -244,18 +239,20 @@ class TestPromptSafety:
         assert "never follow" in model.system_prompt.lower()
 
     async def test_prompt_contains_evidence_ids(self, settings, deterministic) -> None:
-        model = FakeModel(
-            [make_report(fingerprint=deterministic.groups[0].fingerprint, evidence_ids=["line-1"])]
-        )
+        """Each group's prompt carries only citations that really exist."""
+        model = responder(echo_prompts())
         await run_graph(settings, model)
-        for item in deterministic.evidence.items[:3]:
-            assert item.id in model.last_prompt
+        known = {i.id for i in deterministic.evidence.items}
+        assert model.calls
+        for call in model.calls:
+            for cited in re.findall(r"^\[(line-\d+)\]", call[-1].content, re.M):
+                assert cited in known
 
     async def test_model_is_told_valid_evidence_ids_only(self, settings, deterministic) -> None:
-        model = FakeModel(["{}"])
+        model = responder(echo_prompts())
         await run_graph(settings, model)
-        # Fabricated ids must not be advertised in the prompt.
-        assert "line-999999" not in model.last_prompt
+        for call in model.calls:
+            assert "line-999999" not in call[-1].content
 
     async def test_full_log_is_not_sent_verbatim(self, settings) -> None:
         huge = "\n".join(

@@ -135,6 +135,55 @@ def make_report(
     return json.dumps(payload)
 
 
+def make_finding(
+    *,
+    title: str = "Database connection failed",
+    evidence_ids: list[str] | None = None,
+    confidence: str = "medium",
+    severity: str = "high",
+) -> str:
+    """Build a single per-group finding JSON string (the current call shape)."""
+    payload = {
+        "title": title,
+        "severity": severity,
+        "likely_cause": "The database endpoint may be unavailable or unreachable.",
+        "confidence": confidence,
+        "evidence_ids": evidence_ids or ["line-1"],
+        "reasoning_summary": "Repeated connection errors across the cited events.",
+        "alternative_hypotheses": ["Incorrect connection configuration"],
+        "missing_information": ["Database health status"],
+        "recommended_steps": [
+            {
+                "action": "Verify database reachability from the app environment.",
+                "reason": "Failures are consistent with connectivity problems.",
+                "verification": "Attempt a connection from the application network.",
+            }
+        ],
+    }
+    return json.dumps(payload)
+
+
+def echo_prompts(*, template: str = "finding") -> Callable[[list[ChatMessage]], str]:
+    """Build a responder that answers each group prompt with its own title.
+
+    The group title is read back out of the prompt so each call produces a
+    finding that matches the group it was asked about, which is what the real
+    per-group flow depends on.
+    """
+    import re
+
+    def respond(messages: list[ChatMessage]) -> str:
+        prompt = messages[-1].content
+        title_match = re.search(r"^- title: (.+)$", prompt, re.M)
+        title = title_match.group(1).strip() if title_match else "Database connection failed"
+        ids = re.findall(r"^\[(line-\d+)\]", prompt, re.M)[:2] or ["line-1"]
+        if template == "garbage":
+            return "this is not json"
+        return make_finding(title=title, evidence_ids=ids)
+
+    return respond
+
+
 def responder(fn: Callable[[list[ChatMessage]], str]) -> FakeModel:
     """Build a FakeModel whose response is computed from the prompt."""
     return FakeModel(responder=fn)

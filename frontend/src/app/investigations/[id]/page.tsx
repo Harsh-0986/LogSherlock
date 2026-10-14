@@ -11,7 +11,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { ApiError, api } from "@/lib/api";
-import type { ErrorGroup, Finding, InvestigationReport } from "@/lib/types";
+import type { ErrorGroup, Finding, InvestigationReport, ProcessingStep } from "@/lib/types";
 import { SEVERITY_RANK } from "@/lib/types";
 import {
   findingToMarkdown,
@@ -25,7 +25,7 @@ import {
 import { CopyButton } from "@/components/CopyButton";
 import { EvidenceDrawer } from "@/components/EvidenceDrawer";
 import { SeverityBar, SeverityMark } from "@/components/Severity";
-import { StepProgress } from "@/components/StepProgress";
+import { AnalysisProgress } from "@/components/AnalysisProgress";
 
 const TERMINAL = new Set(["completed", "partial", "failed"]);
 
@@ -34,30 +34,54 @@ function InvestigationView() {
   const id = params?.id as string | undefined;
 
   const [report, setReport] = useState<InvestigationReport | null>(null);
-  const [liveSteps, setLiveSteps] = useState<InvestigationReport["processing_steps"]>([]);
+  const [liveSteps, setLiveSteps] = useState<ProcessingStep[]>([]);
+  const [running, setRunning] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
 
-  // Mirrors `report?.status` so the polling interval always sees the current
-  // value without restarting the timer on every render.
+  // Mirrors the backend status so the interval always sees the current value
+  // without being torn down and rebuilt on every render.
   const statusRef = useRef<string>("queued");
+
+  const loadReport = useCallback(async () => {
+    if (!id) return null;
+    const data = await api.investigationReport<InvestigationReport>(id);
+    statusRef.current = data.status;
+    setReport(data);
+    setLiveSteps(data.processing_steps);
+    setRunning(!TERMINAL.has(data.status));
+    return data;
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
 
+    // The status endpoint carries the live step transitions, so it is polled
+    // while the run is in flight; the full report is fetched once it settles.
     const poll = async () => {
       try {
-        const data = await api.investigationReport<InvestigationReport>(id);
+        const status = await api.investigationStatus(id);
         if (cancelled) return;
-        setReport(data);
-        setError(null);
-        statusRef.current = data.status;
+        statusRef.current = status.status;
+        setLiveSteps(status.steps);
+        setRunning(!TERMINAL.has(status.status));
 
-        if (!TERMINAL.has(data.status)) {
-          const status = await api.investigationStatus(id);
-          if (!cancelled) setLiveSteps(status.steps);
+        if (TERMINAL.has(status.status)) {
+          await loadReport();
+          if (!cancelled) setError(null);
         }
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof ApiError ? err.message : "Could not reach the backend.");
+      }
+    };
+
+    const start = async () => {
+      try {
+        await loadReport();
+        if (!cancelled) void poll();
       } catch (err) {
         if (cancelled) return;
         setError(
@@ -66,32 +90,33 @@ function InvestigationView() {
       }
     };
 
-    void poll();
-
+    void start();
     const timer = setInterval(() => {
       if (!TERMINAL.has(statusRef.current)) void poll();
-    }, 800);
+    }, 900);
 
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [id]);
+  }, [id, loadReport]);
 
-  const reload = useCallback(() => {
+  const retry = useCallback(async () => {
     if (!id) return;
-    void api
-      .investigationReport<InvestigationReport>(id)
-      .then((data) => {
-        setReport(data);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        setError(
-          err instanceof ApiError ? err.message : "This investigation could not be loaded.",
-        );
-      });
-  }, [id]);
+    setRetrying(true);
+    setError(null);
+    statusRef.current = "running";
+    setRunning(true);
+    try {
+      await api.retryAi(id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "The retry could not be started.");
+      setRunning(false);
+      statusRef.current = report?.status ?? "partial";
+    } finally {
+      setRetrying(false);
+    }
+  }, [id, report?.status]);
 
   const evidenceIndex = useMemo(() => (report ? indexEvidence(report) : new Map()), [report]);
   const selectedEvidence = useMemo(
@@ -108,7 +133,7 @@ function InvestigationView() {
           <div className="mt-4 flex justify-center gap-3">
             <button
               type="button"
-              onClick={reload}
+              onClick={() => void loadReport().catch(() => setError('Could not reload.'))}
               className="rounded border border-edge-bright px-3 py-1.5 text-sm text-ink hover:border-ink-faint"
             >
               Try again
@@ -188,20 +213,17 @@ function InvestigationView() {
             )}
           </header>
 
-          {/* --- Processing steps --------------------------------------- */}
-          {(() => {
-            const steps = TERMINAL.has(report.status)
-              ? report.processing_steps
-              : liveSteps.length > 0
-                ? liveSteps
-                : report.processing_steps;
-            if (steps.length === 0) return null;
-            return (
-              <Section title={TERMINAL.has(report.status) ? "How this ran" : "Running"}>
-                <StepProgress steps={steps} />
-              </Section>
-            );
-          })()}
+          {/* --- Live progress / retry --------------------------------- */}
+          <div className="mt-6">
+            <AnalysisProgress
+              report={report}
+              liveSteps={liveSteps}
+              running={running}
+              onRetry={retry}
+              retrying={retrying}
+              error={error}
+            />
+          </div>
 
           {/* --- Prioritized groups ------------------------------------- */}
           <Section title="Prioritized error groups">

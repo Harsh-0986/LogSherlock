@@ -54,6 +54,14 @@ class InvestigationState(TypedDict, total=False):
     findings: list[dict[str, Any]]
     validation_errors: list[str]
     repair_attempted: bool
+    #: Raw per-group model responses, before validation.
+    raw_findings: list[dict[str, Any]]
+    #: Fingerprints of groups whose finding was rejected, for one bounded retry.
+    rejected_fingerprints: list[str]
+    #: Deterministically derived report summary (no model call involved).
+    model_summary: str
+    #: Per-group call failures, surfaced as report warnings.
+    model_call_failures: list[str]
 
     # --- Observability ---
     processing_steps: list[ProcessingStep]

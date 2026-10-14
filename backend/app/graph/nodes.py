@@ -7,15 +7,17 @@ repair attempt and a deterministic fallback (SPEC §8.5).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import random
 from datetime import datetime
 from typing import Any
 
 from app.core.errors import InvalidInputError, PayloadTooLargeError
 from app.core.ids import utc_now
 from app.graph.state import InvestigationState, ProcessingStep
-from app.graph.validation import validate_report
+from app.graph.validation import validate_findings as validate_findings_batch
 from app.logengine.models import DeterministicSummary, Runtime, Severity
 from app.logengine.pipeline import (
     ParsedStage,
@@ -34,7 +36,12 @@ from app.models.base import (
     ModelTimeoutError,
     ModelUnavailableError,
 )
-from app.models.prompts import SYSTEM_PROMPT, build_repair_prompt, build_user_prompt
+from app.models.prompts import (
+    GROUP_SYSTEM_PROMPT,
+    build_group_prompt,
+    build_repair_prompt,
+    evidence_for_group,
+)
 
 logger = logging.getLogger("logsherlock.graph")
 
@@ -238,36 +245,49 @@ def select_evidence(state: InvestigationState) -> dict[str, Any]:
 # 6. investigate_with_model
 # ---------------------------------------------------------------------------
 
+#: Calls run one at a time with a short pause between them.
+#:
+#: Firing every request at once is faster but invites provider rate limits, and
+#: a run that is rate-limited or abandoned still consumed the quota. Sequential
+#: calls keep the spend proportional to what actually got used, and make the
+#: per-group progress visible while the report is being assembled.
+MAX_CONCURRENT_GROUP_CALLS = 1
+
 
 async def investigate_with_model(
     state: InvestigationState,
     model: BaseChatModel,
 ) -> dict[str, Any]:
-    """Submit a constrained prompt and request structured output.
+    """Explain each error group with its own focused model call.
 
-    Every failure mode here degrades to deterministic analysis rather than
-    failing the investigation (SPEC §8.5).
+    One call per group rather than one call for the whole report. A reasoning
+    model asked for N findings with ten fields each has a large task to think
+    through and can exhaust its output budget before answering; one group
+    against a handful of cited lines is a small task that finishes.
+
+    Calls run concurrently and are independent: a group whose call fails or
+    returns junk is dropped with a warning, and the remaining groups still
+    produce findings.
     """
     started = _started(state)
     groups = state.get("groups") or []
     evidence = state.get("evidence")
+    cfg = state.get("settings")
+    _SETTINGS_CACHE["stagger"] = float(cfg.model_call_stagger_seconds)
+    _SETTINGS_CACHE["is_test"] = bool(cfg.is_test)
 
-    base: dict[str, Any] = {
-        "validation_errors": [],
-        "repair_attempted": False,
-    }
+    base: dict[str, Any] = {"validation_errors": [], "repair_attempted": False}
 
     if not groups:
         return {
             **base,
             "processing_steps": _record(
-                state,
-                "investigate_with_model",
-                "skipped",
-                started,
+                state, "investigate_with_model", "skipped", started,
                 "No error groups found; nothing to investigate",
             ),
             "findings": [],
+            "raw_findings": [],
+            "model_call_failures": [],
             "ai_skipped_reason": "No error groups were detected in the input.",
         }
 
@@ -275,81 +295,142 @@ async def investigate_with_model(
         return {
             **base,
             "processing_steps": _record(
-                state,
-                "investigate_with_model",
-                "skipped",
-                started,
+                state, "investigate_with_model", "skipped", started,
                 "No evidence available to send to the model",
             ),
             "findings": [],
+            "raw_findings": [],
+            "model_call_failures": [],
             "ai_skipped_reason": "No evidence could be selected for the model.",
         }
 
-    messages = [
-        ChatMessage(role="system", content=SYSTEM_PROMPT),
-        ChatMessage(
-            role="user",
-            content=build_user_prompt(
-                groups=groups,
-                evidence=evidence,
-                context=state.get("context"),
-            ),
-        ),
-    ]
+    # Bound how many groups are explained. Every group costs a model call, so
+    # this setting is what keeps spend proportional to the setting the operator
+    # chose rather than to the size of their log file.
+    limit = int(state.get("settings").max_groups_for_model)
+    targets = groups[:limit]
+    skipped_for_budget = len(groups) - len(targets)
 
-    try:
-        response = await model.complete(messages)
-    except ModelTimeoutError as exc:
-        logger.warning("investigation=%s model timeout", state.get("investigation_id"))
-        return {
-            **base,
-            "processing_steps": _record(
-                state,
-                "investigate_with_model",
-                "failed",
-                started,
-                f"Model timed out: {exc}",
-            ),
-            "findings": [],
-            "ai_skipped_reason": f"AI analysis timed out: {exc}",
-        }
-    except (ModelUnavailableError, ModelError) as exc:
-        logger.warning("investigation=%s model unavailable", state.get("investigation_id"))
-        return {
-            **base,
-            "processing_steps": _record(
-                state,
-                "investigate_with_model",
-                "failed",
-                started,
-                f"Model unavailable: {exc}",
-            ),
-            "findings": [],
-            "ai_skipped_reason": f"AI analysis was unavailable: {exc}",
-        }
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_GROUP_CALLS)
 
-    raw_text = response.text
-    parsed, parse_error = _decode(raw_text)
+    async def explain(group: Any) -> tuple[Any, dict[str, Any] | None, str | None]:
+        """Run one focused call for one group."""
+        items = evidence_for_group(group, evidence)
+        messages = [
+            ChatMessage(role="system", content=GROUP_SYSTEM_PROMPT),
+            ChatMessage(role="user", content=build_group_prompt(group=group, items=items)),
+        ]
+        async with semaphore:
+            try:
+                response = await model.complete(messages)
+            except (ModelTimeoutError, ModelUnavailableError, ModelError) as exc:
+                return group, None, f"{type(exc).__name__}: {exc}"
 
-    return {
+        parsed, decode_error = _decode(response.text)
+        if parsed is None:
+            # One constrained retry for malformed JSON, not a full repair cycle.
+            try:
+                retry = await model.complete([
+                    ChatMessage(role="system", content=GROUP_SYSTEM_PROMPT),
+                    ChatMessage(
+                        role="user",
+                        content=build_repair_prompt(
+                            raw_output=response.text,
+                            validation_errors=[decode_error or "unparseable response"],
+                        ),
+                    ),
+                ])
+            except (ModelTimeoutError, ModelUnavailableError, ModelError) as exc:
+                return group, None, f"unparseable, retry failed ({type(exc).__name__})"
+            parsed, decode_error = _decode(retry.text)
+
+        if parsed is None:
+            return group, None, decode_error or "unparseable response"
+
+        # The caller knows exactly which group this call was for. Stamping the
+        # fingerprint here removes any need to re-match on title, which is
+        # ambiguous when two groups share a message on different call paths.
+        parsed = {**parsed, "fingerprint": group.fingerprint}
+        return group, parsed, None
+
+    results: list[tuple[Any, dict[str, Any] | None, str | None]] = []
+    for group in targets:
+        # Pace every call, including the first: a burst of N identical requests
+        # on open is exactly what gets an API key rate limited.
+        await asyncio.sleep(_stagger_delay())
+        results.append(await explain(group))
+
+    raw_findings: list[dict[str, Any]] = []
+    failures: list[str] = []
+    for group, parsed, error in results:
+        if parsed is not None:
+            raw_findings.append(parsed)
+        elif error is not None:
+            failures.append(f"{group.title[:60]}: {error}")
+
+    # The report summary is derived deterministically, not asked for, so it is
+    # reproducible and costs no call.
+    summary = _deterministic_summary(groups)
+
+    if skipped_for_budget:
+        failures.append(
+            f"{skipped_for_budget} further group(s) were not explained because "
+            f"MAX_GROUPS_FOR_MODEL is {limit}."
+        )
+
+    step_status = "completed" if raw_findings else "failed"
+    note = (
+        f"Explained {len(raw_findings)}/{len(targets)} group(s) via focused calls"
+        + (f"; {len(failures)} issue(s)" if failures else "")
+    )
+
+    update: dict[str, Any] = {
         **base,
-        "processing_steps": _record(
-            state,
-            "investigate_with_model",
-            "completed",
-            started,
-            f"Model {response.model_name} returned {len(raw_text)} chars "
-            f"({'valid JSON' if parsed is not None else 'invalid JSON'})",
-        ),
-        "model_response": raw_text,
-        "model_metadata": {
-            "provider": response.provider,
-            "model": response.model_name,
-        },
-        # Carried for the validation node; not part of the public report.
-        "decoded_report": parsed,
-        "decode_error": parse_error,
+        "processing_steps": _record(state, "investigate_with_model", step_status, started, note),
+        "raw_findings": raw_findings,
+        "model_call_failures": failures,
+        "model_summary": summary,
+        "model_response": " ".join(json.dumps(f) for f in raw_findings[:3]) or None,
+        "model_metadata": {"provider": model.provider_name},
     }
+
+    if raw_findings:
+        return update
+
+    # Nothing survived: treat as an AI failure so the deterministic report stands.
+    update["ai_skipped_reason"] = (
+        failures[0] if failures else "The model returned nothing usable for any group."
+    )
+    return update
+
+
+def _stagger_delay() -> float:
+    """Pause between calls, with jitter so the pattern is not metronomic.
+
+    Not cryptographic; jitter here only avoids a metronomic request pattern.
+    Returns 0 under APP_ENV=test so the suite does not spend its time sleeping.
+    """
+    if _SETTINGS_CACHE.get("is_test"):
+        return 0.0
+    base = _SETTINGS_CACHE.get("stagger", 1.5)
+    return base * random.uniform(0.7, 1.3)  # noqa: S311
+
+
+#: Populated per run from settings by investigate_with_model.
+_SETTINGS_CACHE: dict[str, Any] = {"stagger": 1.5, "is_test": False}
+
+
+def _deterministic_summary(groups: list[Any]) -> str:
+    """Build the report summary from deterministic facts only."""
+    if not groups:
+        return "No error groups were identified."
+    top = groups[0]
+    total = sum(g.count for g in groups)
+    return (
+        f"{len(groups)} recurring error group(s) covering {total} event(s). "
+        f"The most frequent is '{top.title}' ({top.count} occurrences, "
+        f"{top.severity.value} severity)."
+    )
 
 
 def _decode(text: str) -> tuple[dict[str, Any] | None, str | None]:
@@ -372,18 +453,19 @@ def _decode(text: str) -> tuple[dict[str, Any] | None, str | None]:
 
 
 def validate_findings(state: InvestigationState) -> dict[str, Any]:
-    """Validate the model report against deterministic facts (SPEC §8.3)."""
+    """Validate each per-group finding independently (SPEC §8.3).
+
+    A finding that cites nothing real, or cites another group's lines, is
+    rejected on its own. The rest are kept, and the rejected ones are recorded
+    by fingerprint so ``bounded_repair`` can retry just those.
+    """
     started = _started(state)
     groups = state.get("groups") or []
     evidence = state.get("evidence")
     valid_ids = {item.id for item in (evidence.items if evidence else ())}
+    raw_findings = state.get("raw_findings") or []
 
-    decoded = state.get("decoded_report")
-    decode_error = state.get("decode_error")
-
-    # The model may never have been reached at all (unavailable, timed out, or
-    # there was nothing to investigate). That is a skip, not a decode failure.
-    if state.get("model_response") is None:
+    if state.get("model_response") is None and not raw_findings:
         reason = state.get("ai_skipped_reason") or "No model output was produced."
         return {
             "processing_steps": _record(
@@ -395,35 +477,49 @@ def validate_findings(state: InvestigationState) -> dict[str, Any]:
             ),
             "validation_errors": [],
             "findings": [],
+            "rejected_fingerprints": [],
         }
 
-    if decoded is None:
-        return {
-            "processing_steps": _record(
-                state,
-                "validate_findings",
-                "failed",
-                started,
-                decode_error or "Model output could not be decoded",
-            ),
-            "validation_errors": [decode_error or "Model output could not be decoded"],
-            "findings": [],
-        }
+    outcome = validate_findings_batch(
+        raw_findings, groups=groups, valid_evidence_ids=valid_ids
+    )
 
-    outcome = validate_report(decoded, groups=groups, valid_evidence_ids=valid_ids)
+    # Which supplied groups ended up with no accepted finding.
+    answered = {f.fingerprint for f in outcome.findings}
+    rejected = [
+        g.fingerprint
+        for g in groups
+        if g.fingerprint not in answered and _covers_group(g, raw_findings, valid_ids)
+    ]
 
     summary_text = (
-        f"Accepted {len(outcome.findings)} of {len(decoded.get('findings', []))} findings"
+        f"Accepted {len(outcome.findings)} of {len(raw_findings)} finding(s)"
+        + (f"; rejected {len(rejected)} for one retry" if rejected else "")
     )
-    if outcome.discarded:
-        summary_text += f"; discarded {len(outcome.discarded)} as invalid"
 
     return {
-        "processing_steps": _record(state, "validate_findings", "completed", started, summary_text),
-        "report": decoded,
+        "processing_steps": _record(
+            state, "validate_findings", "completed", started, summary_text
+        ),
         "findings": [f.model_dump(mode="json") for f in outcome.findings],
         "validation_errors": outcome.errors,
+        "rejected_fingerprints": rejected,
+        "report": {
+            "summary": state.get("model_summary"),
+            "findings": raw_findings,
+            "limitations": state.get("model_call_failures") or [],
+        },
     }
+
+
+def _covers_group(
+    group: Any, raw_findings: list[dict[str, Any]], valid_ids: set[str]
+) -> bool:
+    """Whether the model attempted this group but the attempt was rejected."""
+    from app.graph.validation import _match_group  # local: internal helper
+
+    seen: dict[str, Any] = {}
+    return any(_match_group(raw, [group], seen) is not None for raw in raw_findings)
 
 
 # ---------------------------------------------------------------------------
@@ -432,63 +528,64 @@ def validate_findings(state: InvestigationState) -> dict[str, Any]:
 
 
 async def bounded_repair(state: InvestigationState, model: BaseChatModel) -> dict[str, Any]:
-    """Request exactly one constrained correction, then give up (SPEC §8.3).
+    """Retry once, and only for the groups that were rejected (SPEC §8.3).
 
-    Never retries indefinitely. If this fails the caller falls back to the
-    deterministic report.
+    The per-group calls already retry malformed JSON inline. This node exists for
+    findings that parsed but failed validation — a fabricated citation, a wrong
+    confidence. It re-asks just those groups, with the specific complaint, and
+    never retries more than once.
     """
     started = _started(state)
+    rejected = state.get("rejected_fingerprints") or []
+    groups = [g for g in (state.get("groups") or []) if g.fingerprint in set(rejected)]
+    evidence = state.get("evidence")
     errors = state.get("validation_errors") or []
-    raw = state.get("model_response") or ""
+    raw_findings = list(state.get("raw_findings") or [])
 
-    messages = [
-        ChatMessage(role="system", content=SYSTEM_PROMPT),
-        ChatMessage(
-            role="user",
-            content=build_repair_prompt(raw_output=raw, validation_errors=errors),
-        ),
-    ]
+    if not groups or evidence is None:
+        return {"findings": [], "repair_attempted": True}
 
-    try:
-        response = await model.complete(messages)
-    except (ModelUnavailableError, ModelTimeoutError, ModelError) as exc:
-        return {
-            "processing_steps": _record(
-                state,
-                "bounded_repair",
-                "failed",
-                started,
-                f"Repair attempt failed: {type(exc).__name__}",
-            ),
-            "findings": [],
-            "repair_attempted": True,
-        }
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_GROUP_CALLS)
 
-    decoded, decode_error = _decode(response.text)
-    if decoded is None:
-        return {
-            "processing_steps": _record(
-                state,
-                "bounded_repair",
-                "failed",
-                started,
-                f"Repair output still invalid: {decode_error}",
-            ),
-            "findings": [],
-            "repair_attempted": True,
-        }
+    async def retry(group: Any) -> tuple[Any, dict[str, Any] | None]:
+        items = evidence_for_group(group, evidence)
+        async with semaphore:
+            try:
+                response = await model.complete([
+                    ChatMessage(role="system", content=GROUP_SYSTEM_PROMPT),
+                    ChatMessage(
+                        role="user",
+                        content=build_group_prompt(group=group, items=items)
+                        + "\n\nYour previous answer was rejected:\n"
+                        + "\n".join(f"- {e}" for e in errors[:5]),
+                    ),
+                ])
+            except (ModelTimeoutError, ModelUnavailableError, ModelError):
+                return group, None
+        parsed, _ = _decode(response.text)
+        if parsed is not None:
+            parsed = {**parsed, "fingerprint": group.fingerprint}
+        return group, parsed
+
+    results = await asyncio.gather(*(retry(g) for g in groups))
+    repaired = [parsed for _g, parsed in results if parsed is not None]
+
+    note = (
+        f"Retried {len(groups)} rejected group(s); recovered {len(repaired)}"
+        if groups
+        else "Nothing to retry"
+    )
 
     return {
         "processing_steps": _record(
             state,
             "bounded_repair",
-            "completed",
+            "completed" if repaired else "failed",
             started,
-            "Model returned a corrected response; re-validating",
+            note,
         ),
+        "raw_findings": [*raw_findings, *repaired],
         "repair_attempted": True,
-        "decoded_report": decoded,
-        "decode_error": None,
     }
 
 
@@ -547,7 +644,11 @@ def _duration_seconds(started: datetime | None) -> float | None:
     return round((utc_now() - started).total_seconds(), 3)
 
 
-def build_fallback_findings(groups: list[Any]) -> list[dict[str, Any]]:
+def build_fallback_findings(
+    groups: list[Any],
+    *,
+    valid_evidence_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
     """Build deterministic findings when the model produced nothing usable.
 
     Used when inference failed or every finding was rejected (SPEC §8.5). These
@@ -556,6 +657,10 @@ def build_fallback_findings(groups: list[Any]) -> list[dict[str, Any]]:
     """
     findings: list[dict[str, Any]] = []
     for group in groups[:8]:
+        # Only cite lines the report actually carries, so every citation in the
+        # UI resolves to evidence the user can open.
+        citations = [eid for eid in group.evidence_ids if valid_evidence_ids is None
+                     or eid in valid_evidence_ids][:4]
         findings.append(
             {
                 "fingerprint": group.fingerprint,
@@ -566,7 +671,7 @@ def build_fallback_findings(groups: list[Any]) -> list[dict[str, Any]]:
                     "Severity is derived deterministically from the logs."
                 ),
                 "confidence": "low",
-                "evidence_ids": list(group.evidence_ids[:4]),
+                "evidence_ids": citations,
                 "reasoning_summary": group.severity_reason,
                 "alternative_hypotheses": [],
                 "missing_information": [
