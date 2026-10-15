@@ -138,7 +138,7 @@ START
   └─ normalize_and_group   strip variable values, fingerprint, cluster
   └─ rank_errors           deterministic severity + ordering
   └─ select_evidence       bounded, redacted, prioritised
-  └─ investigate_with_model
+  └─ investigate_with_model   one call per group, staggered
   └─ validate_findings     every citation resolved against real lines
        └─ (invalid) bounded_repair        one attempt, then give up
             └─ validate_findings
@@ -210,8 +210,7 @@ backend/
     db/                  SQLAlchemy models
     jobs/                in-process job manager
     api/                 FastAPI routes and schemas
-  tests/                 183 tests
-  samples/               synthetic demo logs
+  tests/                 189 tests
 frontend/
   src/app/               /, /analyze, /investigations/[id], /settings
   src/components/        evidence drawer, severity marks, step progress
@@ -231,6 +230,7 @@ All under `/api/v1`.
 | `POST`   | `/api/v1/investigations/upload` | Start from a `.log`/`.txt`/`.jsonl` |
 | `GET`    | `/api/v1/investigations/{id}/status` | Poll real progress         |
 | `GET`    | `/api/v1/investigations/{id}` | Full report                      |
+| `POST`   | `/api/v1/investigations/{id}/retry-ai` | Re-run only the AI stage     |
 | `GET`    | `/api/v1/investigations`      | Paginated history                |
 | `DELETE` | `/api/v1/investigations/{id}` | Delete (`204`)                   |
 
@@ -239,7 +239,7 @@ Errors use one envelope: `{"error": {"code", "message", "details"}}`.
 ## Testing
 
 ```bash
-cd backend && uv run pytest          # 183 tests
+cd backend && uv run pytest          # 189 tests
 cd frontend && npx tsc --noEmit && npx eslint src
 ```
 
@@ -259,6 +259,8 @@ Every value is documented in `backend/.env.example`. The ones that matter:
 | `MAX_LOG_LINES` | `20000` | |
 | `MAX_EVIDENCE_CHARS` | `16000` | Truncation is disclosed, never silent |
 | `MAX_CONCURRENT_INVESTIGATIONS` | `2` | Exceeding returns `429` |
+| `MAX_GROUPS_FOR_MODEL` | `8` | Groups sent to the model — bounds spend |
+| `MODEL_CALL_STAGGER_SECONDS` | `1.5` | Pause before each call, jittered |
 | `PERSIST_RAW_LOGS` | `false` | Leave off |
 
 ---
@@ -302,7 +304,7 @@ uv sync --extra postgres
 ```
 
 ```dotenv
-DATABASE_URL=postgresql+psycopg://user:pass@host:5432/logsheclock
+DATABASE_URL=postgresql+psycopg://user:pass@host:5432/logsherlock
 ```
 
 Render sets `DATABASE_URL` automatically for a database you attach. The models
@@ -315,6 +317,14 @@ and store are dialect-neutral — SQLite appears only in connection arguments an
 
 The frontend is a separate deployment; it only needs `NEXT_PUBLIC_API_BASE_URL`
 pointing at this service.
+
+## Documentation
+
+| Document | What it is for |
+| -------- | -------------- |
+| [SPEC.md](SPEC.md) | Product and technical specification the build is held against |
+| [docs/FEATURES.md](docs/FEATURES.md) | Feature-by-feature reference, and where each piece lives |
+| [docs/HANDOFF.md](docs/HANDOFF.md) | State of the build, what is verified, what will bite you |
 
 ## Known limitations
 

@@ -298,14 +298,14 @@ class TestLiveProgressFields:
         dispose_all()
 
     async def test_status_endpoint_reports_current_step_while_running(
-        self, tmp_path, monkeypatch
+        self, monkeypatch
     ) -> None:
         """End to end: the value the UI polls must not be null mid-run."""
         import asyncio
 
-        url = f"sqlite:///{tmp_path / 'live.db'}"
-        monkeypatch.setenv("APP_ENV", "development")
-        monkeypatch.setenv("DATABASE_URL", url)
+        # APP_ENV stays "test" deliberately. Overriding it to reach the
+        # SQLAlchemy store builds a real provider client, and this test would
+        # then call a paid API. The column round trip is covered above.
         monkeypatch.setenv("MAX_CONCURRENT_INVESTIGATIONS", "8")
 
         from app.config import get_settings

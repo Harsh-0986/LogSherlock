@@ -6,6 +6,7 @@ environment fails at startup rather than mid-investigation (SPEC §13).
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -88,8 +89,13 @@ class Settings(BaseSettings):
 
     @property
     def is_test(self) -> bool:
-        """True when running under pytest or with APP_ENV=test."""
-        return self.app_env == "test"
+        """True when running under pytest or with APP_ENV=test.
+
+        Both conditions, because the second is not always enough: a test that
+        sets APP_ENV=development to exercise the SQLAlchemy store would
+        otherwise build a real provider client and call a paid API.
+        """
+        return self.app_env == "test" or "PYTEST_CURRENT_TEST" in os.environ
 
     @field_validator("model_name")
     @classmethod
